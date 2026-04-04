@@ -20,7 +20,16 @@ This analysis was built using R and Scanpy and follows a standardized single-cel
 ## 📁 Repository Structure
 ```text
 |
-├── scripts/          # Step-by-step Jupyter Notebooks / Rsript files.
-├── src/                # Custom functions for plotting and data transformation.
-├── results/            # Exported CSV tables (Marker genes, DEGs) and PDF figures.
-└── README.md
+├── scripts/
+│   ├── 01_preprocessing.R
+│   ├── 02_consensus_annotation.R
+│   ├── 03_pseudobulk_dge_factory.R
+│   ├── 04_pathway_enrichment.R
+│   └── 05_trajectory_inference.R
+├── env/
+│   └── scRNA_env.yml             
+├── docs/
+│   ├── CHEATSHEET.md             # Quick run commands
+│   └── USAGE_EXAMPLE.md          # Step-by-step tutorial
+├── README.md                     # The Master Executive Summary
+└── .gitignore                    
