@@ -1,0 +1,8 @@
+sample_name,ident1,ident2,data_path
+TN131_HTY,Healthy_Fresh,HTY131,/home/johan/data/PMH_scRNA-seq/TN131_HTY
+TN258_Unaffected,Unaffected_Fresh,UA258,/home/johan/data/PMH_scRNA-seq/TN258_Unaffected
+TN259_acute,Acute_PMH,AC259,/home/johan/data/PMH_scRNA-seq/TN259_acute
+TN260_chronic,Chronic_PMH,CH260,/home/johan/data/PMH_scRNA-seq/TN260_chronic
+2901,Healthy_Fixed,HTY2901,/home/johan/data/PMH_scRNA-seq/2901
+3080,Healthy_Fixed,HTY3080,/home/johan/data/PMH_scRNA-seq/3080
+3106,Healthy_Fixed,HTY3106,/home/johan/data/PMH_scRNA-seq/3106

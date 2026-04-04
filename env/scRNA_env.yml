@@ -1,0 +1,34 @@
+name: seurat_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-base=4.4.1
+  - r-seurat=5.3.1
+  - bioconductor-clusterprofiler
+  - r-harmony
+  - r-optparse
+  
+  # --- MONOCLE 3 ---
+  - r-monocle3
+  
+  # --- CELLCHAT DEPENDENCIES & GITHUB INSTALLER ---
+  - r-remotes
+  - r-nmf
+  - r-circlize
+  - bioconductor-complexheatmap
+  - bioconductor-biocneighbors
+  
+  # Bioconductor Packages
+  - bioconductor-deseq2
+  - bioconductor-slingshot
+  - bioconductor-singlecellexperiment
+  - bioconductor-org.hs.eg.db
+  - bioconductor-singler
+  
+  # Plotting & Tidyverse
+  - r-tidyverse 
+  - r-ggrepel
+  - r-clustree
+  - r-viridis
