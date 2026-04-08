@@ -1,0 +1,24 @@
+name: annotation_env
+channels:
+  - conda-forge
+  - bioconda
+  - pwwang
+  - defaults
+dependencies:
+  # Core
+  - r-base>=4.3.0
+  - r-seurat>=5.0.0
+  - r-optparse
+  
+  # --- ANNOTATION ENGINES ---
+  - bioconductor-singler
+  - bioconductor-celldex
+  - bioconductor-cellid
+  - r-sccatch
+  
+  # --- UTILITIES & PLOTTING ---
+  - r-tidyverse
+  - r-ggpubr
+  - r-patchwork
+  - r-future
+  - r-future.apply

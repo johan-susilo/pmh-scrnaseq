@@ -1,0 +1,208 @@
+Apr-08 17:20:38.662 [main] DEBUG nextflow.cli.Launcher - $> nextflow run main.nf -resume
+Apr-08 17:20:38.929 [main] DEBUG nextflow.cli.CmdRun - N E X T F L O W  ~  version 25.10.4
+Apr-08 17:20:38.978 [main] DEBUG nextflow.plugin.PluginsFacade - Setting up plugin manager > mode=prod; embedded=false; plugins-dir=/home/johan/.nextflow/plugins; core-plugins: nf-amazon@3.4.4,nf-azure@1.20.2,nf-cloudcache@0.5.0,nf-codecommit@0.5.0,nf-console@1.3.0,nf-google@1.23.5,nf-k8s@1.2.2,nf-tower@1.17.5,nf-wave@1.16.1
+Apr-08 17:20:39.045 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Enabled plugins: []
+Apr-08 17:20:39.047 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Disabled plugins: []
+Apr-08 17:20:39.054 [main] INFO  org.pf4j.DefaultPluginManager - PF4J version 3.12.0 in 'deployment' mode
+Apr-08 17:20:39.090 [main] DEBUG nextflow.util.RetryConfig - Missing nextflow session - using default retry config
+Apr-08 17:20:39.460 [main] INFO  org.pf4j.AbstractPluginManager - No plugins
+Apr-08 17:20:39.547 [main] DEBUG nextflow.config.ConfigBuilder - Found config local: /home/johan/git/pmh-scrnaseq/nextflow.config
+Apr-08 17:20:39.557 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /home/johan/git/pmh-scrnaseq/nextflow.config
+Apr-08 17:20:39.639 [main] DEBUG nextflow.config.ConfigBuilder - Applying config profile: `standard`
+Apr-08 17:20:40.796 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins default=[]
+Apr-08 17:20:40.797 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins resolved requirement=[]
+Apr-08 17:20:40.835 [main] DEBUG n.secret.LocalSecretsProvider - Secrets store: /home/johan/.nextflow/secrets/store.json
+Apr-08 17:20:40.842 [main] DEBUG nextflow.secret.SecretsLoader - Discovered secrets providers: [nextflow.secret.LocalSecretsProvider@79518e00] - activable => nextflow.secret.LocalSecretsProvider@79518e00
+Apr-08 17:20:40.868 [main] DEBUG nextflow.cli.CmdRun - Applied DSL=2 by global default
+Apr-08 17:20:40.905 [main] DEBUG nextflow.cli.CmdRun - Launching `main.nf` [tender_allen] DSL2 - revision: f206a2b91d
+Apr-08 17:20:41.021 [main] DEBUG nextflow.Session - Session UUID: 8ff72d68-3b66-470b-be08-ac7e33c56602
+Apr-08 17:20:41.022 [main] DEBUG nextflow.Session - Run name: tender_allen
+Apr-08 17:20:41.023 [main] DEBUG nextflow.Session - Executor pool size: 64
+Apr-08 17:20:41.046 [main] DEBUG nextflow.file.FilePorter - File porter settings maxRetries=3; maxTransfers=50; pollTimeout=null
+Apr-08 17:20:41.059 [main] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'FileTransfer' minSize=10; maxSize=192; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Apr-08 17:20:41.124 [main] DEBUG nextflow.cli.CmdRun - 
+  Version: 25.10.4 build 11173
+  Created: 10-02-2026 15:17 UTC (23:17 CDT)
+  System: Linux 5.4.0-150-generic
+  Runtime: Groovy 4.0.28 on OpenJDK 64-Bit Server VM 21.0.6+9-b895.97
+  Encoding: UTF-8 (UTF-8)
+  Process: 14536@Daniel.1116 [172.16.1.13]
+  CPUs: 64 - Mem: 1007.9 GB (2.5 GB) - Swap: 2 GB (0)
+Apr-08 17:20:41.223 [main] DEBUG nextflow.Session - Work-dir: /home/johan/80T/johan/output/nextflow/work [nfs]
+Apr-08 17:20:41.224 [main] DEBUG nextflow.Session - Script base path does not exist or is not a directory: /home/johan/git/pmh-scrnaseq/bin
+Apr-08 17:20:41.245 [main] DEBUG nextflow.executor.ExecutorFactory - Extension executors providers=[]
+Apr-08 17:20:41.269 [main] DEBUG nextflow.Session - Observer factory (v2): LinObserverFactory
+Apr-08 17:20:41.279 [main] DEBUG nextflow.Session - Observer factory (v2): DefaultObserverFactory
+Apr-08 17:20:41.406 [main] DEBUG nextflow.cache.CacheFactory - Using Nextflow cache factory: nextflow.cache.DefaultCacheFactory
+Apr-08 17:20:41.428 [main] DEBUG nextflow.util.CustomThreadPool - Creating default thread pool > poolSize: 65; maxThreads: 1000
+Apr-08 17:20:41.605 [main] DEBUG nextflow.Session - Session start
+Apr-08 17:20:42.688 [main] DEBUG nextflow.script.ScriptRunner - > Launching execution
+Apr-08 17:20:43.297 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: null
+Apr-08 17:20:43.298 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'local'
+Apr-08 17:20:43.326 [main] DEBUG nextflow.executor.Executor - [warm up] executor > local
+Apr-08 17:20:43.347 [main] DEBUG n.processor.LocalPollingMonitor - Creating local task monitor for executor 'local' > cpus=64; memory=1007.9 GB; capacity=64; pollInterval=100ms; dumpInterval=5m
+Apr-08 17:20:43.353 [main] DEBUG n.processor.TaskPollingMonitor - >>> barrier register (monitor: local)
+Apr-08 17:20:43.421 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'LOAD': maxForks=0; fair=false; array=0
+Apr-08 17:20:43.522 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: null
+Apr-08 17:20:43.523 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'local'
+Apr-08 17:20:43.526 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'QC_FILTER': maxForks=0; fair=false; array=0
+Apr-08 17:20:43.559 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: null
+Apr-08 17:20:43.560 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'local'
+Apr-08 17:20:43.563 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'INTEGRATE': maxForks=0; fair=false; array=0
+Apr-08 17:20:43.577 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: null
+Apr-08 17:20:43.577 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'local'
+Apr-08 17:20:43.580 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'ANNOTATE': maxForks=0; fair=false; array=0
+Apr-08 17:20:43.589 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: null
+Apr-08 17:20:43.589 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'local'
+Apr-08 17:20:43.592 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'PLOT': maxForks=0; fair=false; array=0
+Apr-08 17:20:43.602 [main] DEBUG nextflow.Session - Workflow process names [dsl2]: ANNOTATE, QC_FILTER, PLOT, LOAD, INTEGRATE
+Apr-08 17:20:43.608 [main] DEBUG nextflow.Session - Igniting dataflow network (6)
+Apr-08 17:20:43.625 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > LOAD
+Apr-08 17:20:43.626 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > QC_FILTER
+Apr-08 17:20:43.628 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > INTEGRATE
+Apr-08 17:20:43.629 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > ANNOTATE
+Apr-08 17:20:43.629 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > PLOT
+Apr-08 17:20:43.632 [main] DEBUG nextflow.script.ScriptRunner - Parsed script files:
+  Script_c708c259c72ffaf3: /home/johan/git/pmh-scrnaseq/main.nf
+Apr-08 17:20:43.632 [main] DEBUG nextflow.script.ScriptRunner - > Awaiting termination 
+Apr-08 17:20:43.632 [main] DEBUG nextflow.Session - Session await
+Apr-08 17:20:43.888 [Actor Thread 25] DEBUG nextflow.conda.CondaCache - mamba found local env for environment=/home/johan/git/pmh-scrnaseq/env/seurat_env.yml; path=/home/johan/80T/johan/output/nextflow/work/conda/env-f97baf56cf0fe655224263ca1c40efdc
+Apr-08 17:20:44.179 [Actor Thread 17] INFO  nextflow.processor.TaskProcessor - [fc/96def7] Cached process > LOAD (4)
+Apr-08 17:20:44.179 [Actor Thread 23] INFO  nextflow.processor.TaskProcessor - [70/80538e] Cached process > LOAD (7)
+Apr-08 17:20:44.179 [Actor Thread 11] INFO  nextflow.processor.TaskProcessor - [c1/f4a5dc] Cached process > LOAD (1)
+Apr-08 17:20:44.179 [Actor Thread 21] INFO  nextflow.processor.TaskProcessor - [f3/a744e7] Cached process > LOAD (6)
+Apr-08 17:20:44.179 [Actor Thread 19] INFO  nextflow.processor.TaskProcessor - [c0/7f3704] Cached process > LOAD (5)
+Apr-08 17:20:44.180 [Actor Thread 13] INFO  nextflow.processor.TaskProcessor - [78/18d22a] Cached process > LOAD (2)
+Apr-08 17:20:44.180 [Actor Thread 15] INFO  nextflow.processor.TaskProcessor - [32/187289] Cached process > LOAD (3)
+Apr-08 17:20:44.358 [Actor Thread 42] INFO  nextflow.processor.TaskProcessor - [2e/dcc3b2] Cached process > QC_FILTER (5)
+Apr-08 17:20:44.359 [Actor Thread 34] INFO  nextflow.processor.TaskProcessor - [d4/aba584] Cached process > QC_FILTER (2)
+Apr-08 17:20:44.359 [Actor Thread 45] INFO  nextflow.processor.TaskProcessor - [d9/94865f] Cached process > QC_FILTER (6)
+Apr-08 17:20:44.360 [Actor Thread 46] INFO  nextflow.processor.TaskProcessor - [c2/79b20b] Cached process > QC_FILTER (7)
+Apr-08 17:20:44.360 [Actor Thread 37] INFO  nextflow.processor.TaskProcessor - [d2/7364e6] Cached process > QC_FILTER (3)
+Apr-08 17:20:44.361 [Actor Thread 39] INFO  nextflow.processor.TaskProcessor - [51/58b026] Cached process > QC_FILTER (4)
+Apr-08 17:20:44.369 [Actor Thread 29] INFO  nextflow.processor.TaskProcessor - [63/686abf] Cached process > QC_FILTER (1)
+Apr-08 17:20:44.432 [Actor Thread 37] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'PublishDir' minSize=10; maxSize=192; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Apr-08 17:20:44.574 [Actor Thread 64] INFO  nextflow.processor.TaskProcessor - [67/db0582] Cached process > INTEGRATE
+Apr-08 17:20:44.593 [Actor Thread 63] DEBUG nextflow.conda.CondaCache - mamba found local env for environment=/home/johan/git/pmh-scrnaseq/env/annotation_env.yml; path=/home/johan/80T/johan/output/nextflow/work/conda/env-627ea90f7f585437466be116e7c64a99
+Apr-08 17:20:44.790 [Task submitter] DEBUG n.executor.local.LocalTaskHandler - Launch cmd line: /bin/bash -ue .command.run
+Apr-08 17:20:44.798 [Task submitter] INFO  nextflow.Session - [4c/0a3d61] Submitted process > ANNOTATE
+Apr-08 17:25:43.482 [Task monitor] DEBUG n.processor.TaskPollingMonitor - !! executor local > tasks to be completed: 1 -- submitted tasks are shown below
+~> TaskHandler[id: 16; name: ANNOTATE; status: RUNNING; exit: -; error: -; workDir: /home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc]
+Apr-08 17:30:43.548 [Task monitor] DEBUG n.processor.TaskPollingMonitor - !! executor local > tasks to be completed: 1 -- submitted tasks are shown below
+~> TaskHandler[id: 16; name: ANNOTATE; status: RUNNING; exit: -; error: -; workDir: /home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc]
+Apr-08 17:35:43.630 [Task monitor] DEBUG n.processor.TaskPollingMonitor - !! executor local > tasks to be completed: 1 -- submitted tasks are shown below
+~> TaskHandler[id: 16; name: ANNOTATE; status: RUNNING; exit: -; error: -; workDir: /home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc]
+Apr-08 17:35:57.520 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[id: 16; name: ANNOTATE; status: COMPLETED; exit: 1; error: -; workDir: /home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc]
+Apr-08 17:35:57.523 [Task monitor] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'TaskFinalizer' minSize=10; maxSize=192; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Apr-08 17:35:57.568 [TaskFinalizer-1] DEBUG nextflow.processor.TaskProcessor - Handling unexpected condition for
+  task: name=ANNOTATE; work-dir=/home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc
+  error [nextflow.exception.ProcessFailedException]: Process `ANNOTATE` terminated with an error exit status (1)
+Apr-08 17:35:57.649 [TaskFinalizer-1] ERROR nextflow.processor.TaskProcessor - Error executing process > 'ANNOTATE'
+
+Caused by:
+  Process `ANNOTATE` terminated with an error exit status (1)
+
+
+Command executed:
+
+  Rscript /home/johan/git/pmh-scrnaseq/scripts/04_annotation.R \
+    --project_dir /home/johan/git/pmh-scrnaseq \
+    --rds TN.combined_dim30.rds \
+    --output_dir ./annotations \
+    --resolution 0.4 \
+    --tissue skin
+
+Command exit status:
+  1
+
+Command output:
+  [1] "2026-04-08 17:20:51 CST"
+  $singleR
+  [1] TRUE
+  
+  $celliD
+  [1] TRUE
+  
+  $scCATCH
+  [1] TRUE
+  
+  $consensus
+  [1] TRUE
+
+Command error:
+  [1] "2026-04-08 17:20:51 CST"
+  Warning message:
+  replacing previous import ‘data.table::shift’ by ‘tictoc::shift’ when loading ‘CelliD’ 
+  $singleR
+  [1] TRUE
+  
+  $celliD
+  [1] TRUE
+  
+  $scCATCH
+  [1] TRUE
+  
+  $consensus
+  [1] TRUE
+  
+  Reading RDS file: TN.combined_dim30.rds
+  
+  --- Running SingleR ---
+  
+  --- Running CelliD ---
+  Creating a temporary v4 clone to bypass CelliD compatibility issues...
+  Running MCA on pure v4 object...
+  Error in (function (cond)  : 
+    error in evaluating the argument 'x' in selecting a method for function 'as.matrix': The `slot` argument of `GetAssayData()` was deprecated in SeuratObject
+  5.0.0 and is now defunct.
+  ℹ Please use the `layer` argument instead.
+  Calls: RunMCA ... cnd_signal -> signal_abort -> signalCondition -> <Anonymous>
+  Execution halted
+
+Work dir:
+  /home/johan/80T/johan/output/nextflow/work/4c/0a3d618c6236c366db85d74105c9dc
+
+Tip: view the complete command output by changing to the process work dir and entering the command `cat .command.out`
+Apr-08 17:35:57.667 [main] DEBUG nextflow.Session - Session await > all processes finished
+Apr-08 17:35:57.676 [TaskFinalizer-1] DEBUG nextflow.Session - Session aborted -- Cause: Process `ANNOTATE` terminated with an error exit status (1)
+Apr-08 17:35:57.747 [TaskFinalizer-1] DEBUG n.trace.WorkflowStatsObserver - Workflow completed > WorkflowStats[succeededCount=0; failedCount=1; ignoredCount=0; cachedCount=15; pendingCount=0; submittedCount=0; runningCount=0; retriesCount=0; abortedCount=0; succeedDuration=0ms; failedDuration=30m 25s; cachedDuration=5h 21m 33s;loadCpus=0; loadMemory=0; peakRunning=1; peakCpus=2; peakMemory=8 GB; ]
+Apr-08 17:35:57.752 [Task monitor] DEBUG n.processor.TaskPollingMonitor - <<< barrier arrives (monitor: local) - terminating tasks monitor poll loop
+Apr-08 17:35:57.753 [main] DEBUG nextflow.Session - Session await > all barriers passed
+Apr-08 17:35:57.759 [main] DEBUG n.trace.WorkflowStatsObserver - Workflow completed > WorkflowStats[succeededCount=0; failedCount=1; ignoredCount=0; cachedCount=15; pendingCount=0; submittedCount=0; runningCount=0; retriesCount=0; abortedCount=0; succeedDuration=0ms; failedDuration=30m 25s; cachedDuration=5h 21m 33s;loadCpus=0; loadMemory=0; peakRunning=1; peakCpus=2; peakMemory=8 GB; ]
+Apr-08 17:35:57.758 [TaskFinalizer-1] DEBUG nextflow.Session - null
+java.lang.InterruptedException: null
+	at java.base/java.lang.Object.wait0(Native Method)
+	at java.base/java.lang.Object.wait(Object.java:366)
+	at java.base/java.lang.Thread.join(Thread.java:2079)
+	at java.base/java.lang.Thread.join(Thread.java:2155)
+	at nextflow.trace.AnsiLogObserver.onFlowComplete(AnsiLogObserver.groovy:520)
+	at nextflow.Session$_notifyFlowComplete_lambda39.doCall(Session.groovy:1121)
+	at nextflow.Session.notifyEvent(Session.groovy:1151)
+	at nextflow.Session.notifyFlowComplete(Session.groovy:1121)
+	at nextflow.Session.shutdown0(Session.groovy:779)
+	at nextflow.Session.abort(Session.groovy:834)
+	at nextflow.Session.fault(Session.groovy:796)
+	at nextflow.processor.TaskPollingMonitor.finalizeTask(TaskPollingMonitor.groovy:753)
+	at nextflow.processor.TaskPollingMonitor.safeFinalizeTask(TaskPollingMonitor.groovy:736)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.codehaus.groovy.reflection.CachedMethod.invoke(CachedMethod.java:343)
+	at groovy.lang.MetaMethod.doMethodInvoke(MetaMethod.java:328)
+	at groovy.lang.MetaClassImpl.doInvokeMethod(MetaClassImpl.java:1339)
+	at groovy.lang.MetaClassImpl.invokeMethod(MetaClassImpl.java:1094)
+	at groovy.lang.MetaClassImpl.invokeMethod(MetaClassImpl.java:1007)
+	at org.codehaus.groovy.runtime.InvokerHelper.invokePogoMethod(InvokerHelper.java:645)
+	at org.codehaus.groovy.runtime.InvokerHelper.invokeMethod(InvokerHelper.java:628)
+	at org.codehaus.groovy.runtime.InvokerHelper.invokeMethodSafe(InvokerHelper.java:82)
+	at nextflow.processor.TaskPollingMonitor$_checkTaskStatus_lambda8.doCall(TaskPollingMonitor.groovy:726)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+Apr-08 17:35:57.765 [TaskFinalizer-1] DEBUG nextflow.trace.ReportObserver - Workflow completed -- rendering execution report
+Apr-08 17:35:57.876 [main] DEBUG nextflow.trace.ReportObserver - Workflow completed -- rendering execution report
+Apr-08 17:35:59.505 [TaskFinalizer-1] DEBUG nextflow.trace.TimelineObserver - Workflow completed -- rendering execution timeline
+Apr-08 17:35:59.506 [main] DEBUG nextflow.trace.TimelineObserver - Workflow completed -- rendering execution timeline
+Apr-08 17:35:59.712 [main] DEBUG nextflow.cache.CacheDB - Closing CacheDB done
+Apr-08 17:35:59.756 [main] DEBUG nextflow.script.ScriptRunner - > Execution complete -- Goodbye

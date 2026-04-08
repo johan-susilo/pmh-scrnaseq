@@ -7,7 +7,6 @@
 #' @param path String. Path to the manifest CSV file.
 #' @return A data frame containing the manifest data.
 #' @export
-
 load_manifest <- function(path) {
   if(!file.exists(path)) {
     stop(paste("Execution Halted: Manifest file not found at", path))

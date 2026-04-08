@@ -6,6 +6,10 @@ suppressPackageStartupMessages({
   library(Seurat)
 })
 
+# =========================================================================
+# Define Command-Line Arguments
+# =========================================================================
+
 option_list <- list(
   make_option(c("--project_dir"), type="character", default=NULL, help="Path to the Nextflow project directory"),
   make_option(c("--sample_name"), type="character", default=NULL, help="Name of the sample"),
@@ -19,15 +23,15 @@ option_list <- list(
 opt_parser <- OptionParser(option_list=option_list)
 opt <- parse_args(opt_parser) #reads what the user actually passed in
 
-io_path <- file.path(opt$project_dir, "utils", "io.R")
-source(io_path)
-
 # check if essential arguments are missing
 if (is.null(opt$sample_name) || is.null(opt$data_path)) {
   print_help(opt_parser)
   stop("Execution Halted: --sample_name and --data_path must be supplied.", call.=FALSE)
 }
 
+if (!dir.exists(opt$output_dir)) dir.create(opt$output_dir, recursive = TRUE)
+
+source(file.path(opt$project_dir, "utils", "io.R"))
 
 ###########################################################
 
