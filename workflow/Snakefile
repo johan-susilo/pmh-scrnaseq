@@ -1,0 +1,141 @@
+import os
+
+# 1. Load configuration (defaults)
+configfile: "config/config.yaml"
+
+# 2. Extract variables dynamically. 
+# If the user doesn't specify an output dir, default to "results/" in the current working directory.
+OUTDIR = config.get("outdir", "results")
+DATA_DIR = config.get("data_dir", "data")
+INPUT_CSV = config.get("input_csv", "config/input.csv")
+
+# 3. Define the ultimate targets dynamically
+rule all:
+    input:
+        os.path.join(OUTDIR, "TN.combined_dim30.rds"),
+        os.path.join(OUTDIR, "subset_cluster", "fibroblast", "processed", "fibroblast_annotated_final.rds"),
+        os.path.join(OUTDIR, "subset_cluster", "fibroblast", "pathways", "fibroblast_PMH_vs_Healthy_GO_Comparative.pdf"),
+        os.path.join(OUTDIR, "subset_cluster", "fibroblast", "plots", "fibroblast_Density_Pseudotime_by_Stage.pdf")
+
+
+# 4. Rules use the variables, not hardcoded strings
+rule preprocess_harmony:
+    input:
+        csv = config["input_csv"]
+    output:
+        rds = os.path.join(OUTDIR, "TN.combined_dim30.rds")
+    log:
+        os.path.join(OUTDIR, "logs", "preprocess_harmony.log")
+    params:
+        data_dir     = config["data_dir"],
+        out_dir      = os.path.join(OUTDIR),
+        res          = config["preprocessing"]["resolution"],
+        min_features = config["preprocessing"]["min_features"],
+        max_mt       = config["preprocessing"]["max_mt"]
+    conda:
+        "envs/scRNA_env.yaml"
+    shell:
+        """
+        Rscript workflow/scripts/preprocessing.R \
+            -f {input.csv} \
+            -d {params.data_dir} \
+            -o {params.out_dir} \
+            --resolution {params.res} \
+            --min_features {params.min_features} \
+            --max_mt {params.max_mt} \
+            -s all &> {log}
+        """
+
+
+# 5. Subsequent rules map inputs from previous outputs
+rule subset_cleaner_fibroblast:
+    input:
+        rds = rules.preprocess_harmony.output.rds, # Link rules directly! No hardcoded paths!
+        script = "workflow/scripts/subset_and_annotate.R"
+    output:
+        processed_rds = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "processed", "fibroblast_annotated_final.rds")
+    params:
+        outdir = os.path.join(OUTDIR, "subset_cluster")
+    log:
+        os.path.join(OUTDIR, "logs", "subset_fibroblast.log")
+    shell:
+        """
+        Rscript {input.script} \
+            --input {input.rds} \
+            --prefix fibroblast \
+            --clusters "1,3,8" \
+            --outdir {params.outdir} &> {log}
+        """
+
+rule differential_expression:
+    input:
+        rds = rules.subset_cleaner_fibroblast.output.processed_rds,
+        script = "workflow/scripts/differential_expression.R"
+    output:
+        csv = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "dge", "fibroblast_{ident1}_vs_{ident2}_DGE.csv")
+    log:
+        os.path.join(OUTDIR, "logs", "differential_expression_{ident1}_vs_{ident2}.log")
+    params:
+        compare_by = config["dge"]["compare_by"],
+        ident1 = config["dge"]["ident_1"],
+        ident2 = config["dge"]["ident_2"],
+        prefix = "fibroblast",
+        outdir = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "dge")
+    shell:
+        """
+        Rscript {input.script} \
+            --input {input.rds} \
+            --compare_by {params.compare_by} \
+            --ident_1 {params.ident1} \
+            --ident_2 {params.ident2} \
+            --prefix {params.prefix} \
+            --outdir {params.outdir} &> {log}
+        """
+
+
+rule pathway_analysis:
+    input:
+        csv = rules.differential_expression.output.csv,
+        script = "workflow/scripts/pathway_analysis.R"
+    output:
+        go_pdf = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "pathways", "fibroblast_{ident1}_vs_{ident2}_GO_Comparative.pdf"),
+        reactome_pdf = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "pathways", "fibroblast_{ident1}_vs_{ident2}_Reactome_Comparative.pdf")
+    log:
+        os.path.join(OUTDIR,  "logs", "pathway_analysis_{ident1}_vs_{ident2}.log")
+    params:
+        prefix = "fibroblast_{ident1}_vs_{ident2}",
+        outdir = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "pathways"),
+        logfc = config["pathway"]["logfc_cutoff"],
+        pval = config["pathway"]["pval_cutoff"]
+    shell:
+        """
+        Rscript {input.script} \
+            --input {input.csv} \
+            --prefix {params.prefix} \
+            --outdir {params.outdir} \
+            --logfc {params.logfc} \
+            --pval {params.pval} &> {log}
+        """
+
+rule trajectory_inference:
+    input:
+        rds = rules.subset_cleaner_fibroblast.output.processed_rds,
+        script = "workflow/scripts/trajectory_inference.R"
+    output:
+        # We define both the new RDS and a key plot as outputs to track completion
+        rds = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "processed", "fibroblast_annotated_with_pseudotime.rds"),
+        density_plot = os.path.join(OUTDIR, "subset_cluster", "fibroblast", "plots", "fibroblast_Density_Pseudotime_by_Stage.pdf")
+    params:
+        prefix = "fibroblast",
+        root_state = config["trajectory"]["root_state"],
+        outdir = os.path.join(OUTDIR, "subset_cluster", "fibroblast")
+    log:
+        os.path.join(OUTDIR, "logs", "trajectory_analysis.log")
+    shell:
+        """
+        Rscript {input.script} \
+            --input {input.rds} \
+            --prefix {params.prefix} \
+            --root_state "{params.root_state}" \
+            --outdir {params.outdir} &> {log}
+        """

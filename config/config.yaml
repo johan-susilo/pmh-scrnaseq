@@ -1,0 +1,54 @@
+# ==============================================================================
+# scRNA-seq Pipeline Configuration
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Global Paths (I/O)
+# ------------------------------------------------------------------------------
+# Default output directory. Can be overridden via CLI: --config outdir=/new/path
+outdir: "results"
+
+# Directory containing the raw cellranger/matrix sample folders
+data_dir: "data"
+
+# Path to the sample metadata CSV (columns: sample_names, ident1, ident2)
+input_csv: "config/input.csv"
+
+# ------------------------------------------------------------------------------
+# 2. Pipeline Parameters: Global Preprocessing (01_preprocessing.R)
+# ------------------------------------------------------------------------------
+preprocessing:
+  resolution: 0.2
+  doublet_rate: 0.08
+  min_features: 200
+  max_features: 5000
+  max_mt: 30
+  use_sct: true
+  batch_var: "orig.ident2"
+
+# ------------------------------------------------------------------------------
+# 3. Pipeline Parameters: Subsetting (subset_cleaner.R)
+# ------------------------------------------------------------------------------
+subsetting:
+  target_celltype: "fibroblast"
+  clusters_to_keep: "1,3,8"
+
+# ------------------------------------------------------------------------------
+# 4. Pipeline Parameters: Differential Expression
+# ------------------------------------------------------------------------------
+dge:
+  compare_by: "Condition"   # The metadata column to use
+  ident_1: "PMH"            # Primary group
+  ident_2: "Healthy"        # Control group (use "NULL" for 1-vs-All)
+
+# ------------------------------------------------------------------------------
+# 5. Pipeline Parameters: Pathway Analysis & Trajectory
+# ------------------------------------------------------------------------------
+pathway:
+  logfc_cutoff: 0.5
+  pval_cutoff: 0.05
+
+trajectory:
+  # The precise name of the root cluster (e.g., "F2_Universal_Reticular"). 
+  # Use "NULL" to let the script auto-detect the cluster with the highest "Healthy" proportion.
+  root_state: "NULL"
