@@ -27,12 +27,16 @@ preprocessing:
   batch_var: "orig.ident2"
 
 # ------------------------------------------------------------------------------
-# 3. Pipeline Parameters: Subsetting (subset_cleaner.R)
+# 3. Pipeline Parameters: Subsetting
 # ------------------------------------------------------------------------------
 subsetting:
-  target_celltype: "fibroblast"
-  clusters_to_keep: "1,3,8"
+  celltypes:
+    - "fibroblast"
+    - "macrophage"
+    - "Mast"
+    - "keratinocyte"
 
+    
 # ------------------------------------------------------------------------------
 # 4. Pipeline Parameters: Differential Expression
 # ------------------------------------------------------------------------------
