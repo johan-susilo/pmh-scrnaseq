@@ -56,3 +56,14 @@ trajectory:
   # The precise name of the root cluster (e.g., "F2_Universal_Reticular"). 
   # Use "NULL" to let the script auto-detect the cluster with the highest "Healthy" proportion.
   root_state: "NULL"
+
+# ------------------------------------------------------------------------------
+# 6. Pipeline Parameters: CellChat (08_cellchat_analysis.R)
+# ------------------------------------------------------------------------------
+# Each entry is a [type1, type2] pair to run pairwise cross-talk analysis on.
+# type1/type2 must match folder names under 03_subsets (i.e. entries in
+# subsetting.celltypes above) and both must have a *_detailed_annotated.rds.
+cellchat:
+  pairs:
+    - ["fibroblast", "macrophage"]
+    # - ["Mast", "keratinocyte"]   # uncomment / add more pairs as needed

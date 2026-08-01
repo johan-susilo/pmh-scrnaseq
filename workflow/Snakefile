@@ -8,13 +8,30 @@ INPUT_CSV = config.get("input_csv", "config/input.csv")
 RES = config["preprocessing"]["resolution"]
 CELLTYPES = config["subsetting"]["celltypes"]
 
+# List of [type1, type2] pairs to run CellChat on. Defaults to fibroblast/macrophage
+# if not specified in config.yaml under `cellchat: pairs:`.
+CELLCHAT_PAIRS = config.get("cellchat", {}).get("pairs", [["fibroblast", "macrophage"]])
+CELLCHAT_OUTPUTS = [
+    os.path.join(OUTDIR, "04_cellchat", f"{t1}_{t2}", f"{t1}_{t2}_cellchat.rds")
+    for t1, t2 in CELLCHAT_PAIRS
+]
+
 rule all:
     input:
+        # Preprocessing & Global Annotation
         os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds"),
         os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "TN.combined_annotated.rds"),
+        # Per-celltype subsetting & detailed annotation
         expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_subset_processed.rds"), celltype=CELLTYPES),
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES)
-        
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES),
+        # DGE (pseudobulk) + downstream GO/KEGG pathway enrichment (run once across all celltypes)
+        os.path.join(OUTDIR, "03_subsets", "_dge.done"),
+        os.path.join(OUTDIR, "03_subsets", "_go.done"),
+        # Per-celltype pseudotime
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global", "pseudotime_values.csv"), celltype=CELLTYPES),
+        # Pairwise CellChat cross-talk
+        CELLCHAT_OUTPUTS
+
 rule preprocessing:
     input:
         csv = INPUT_CSV
@@ -106,4 +123,89 @@ rule detail_annotation:
             -i {input.subset_rds} \
             -c {wildcards.celltype} \
             -o {params.outdir} &> {log}
+        """
+
+rule dge:
+    # Depends on EVERY celltype's detailed annotation being done, since the
+    # script processes all celltype folders under --indir in a single pass.
+    input:
+        detailed = expand(
+            os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds"),
+            celltype=CELLTYPES
+        )
+    output:
+        flag = os.path.join(OUTDIR, "03_subsets", "_dge.done")
+    log:
+        os.path.join(OUTDIR, "logs", "05_dge.log")
+    params:
+        indir = os.path.join(OUTDIR, "03_subsets")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+
+        Rscript workflow/scripts/05_dge.R --indir {params.indir} &> {log}
+        touch {output.flag}
+        """
+
+rule go:
+    # Depends on dge's DESeq2 CSVs existing for every celltype.
+    input:
+        flag = rules.dge.output.flag
+    output:
+        flag = os.path.join(OUTDIR, "03_subsets", "_go.done")
+    log:
+        os.path.join(OUTDIR, "logs", "06_go.log")
+    params:
+        indir = os.path.join(OUTDIR, "03_subsets")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+
+        Rscript workflow/scripts/06_go.R --indir {params.indir} &> {log}
+        touch {output.flag}
+        """
+
+rule pseudotime:
+    input:
+        detailed_rds = rules.detail_annotation.output.detailed_rds
+    output:
+        pseudotime_csv = os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global", "pseudotime_values.csv")
+    log:
+        os.path.join(OUTDIR, "logs", "07_pseudotime_{celltype}.log")
+    params:
+        outdir = os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+
+        Rscript workflow/scripts/07_pseudotime.R \
+            -r {input.detailed_rds} \
+            --all_clusters \
+            -o {params.outdir} &> {log}
+        """
+
+rule cellchat:
+    # Runs on the `cellchat` mamba env (kept separate from seurat_env) due to
+    # CellChat's Matrix/igraph version pinning conflicting with Seurat/monocle3.
+    input:
+        obj1 = os.path.join(OUTDIR, "03_subsets", "{type1}", "processed", "{type1}_detailed_annotated.rds"),
+        obj2 = os.path.join(OUTDIR, "03_subsets", "{type2}", "processed", "{type2}_detailed_annotated.rds")
+    output:
+        rds = os.path.join(OUTDIR, "04_cellchat", "{type1}_{type2}", "{type1}_{type2}_cellchat.rds")
+    log:
+        os.path.join(OUTDIR, "logs", "08_cellchat_{type1}_{type2}.log")
+    params:
+        outdir = os.path.join(OUTDIR, "04_cellchat", "{type1}_{type2}")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate cellchat
+
+        Rscript workflow/scripts/08_cellchat_analysis.R \
+            --obj1 {input.obj1} --type1 {wildcards.type1} \
+            --obj2 {input.obj2} --type2 {wildcards.type2} \
+            --outdir {params.outdir} &> {log}
         """

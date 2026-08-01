@@ -39,6 +39,7 @@ suppressPackageStartupMessages({
 
 source("workflow/scripts/00_utils.R")
 set.seed(42)
+RNGkind("L'Ecuyer-CMRG")
 options(future.globals.maxSize = 100 * 1024^3)
 
 # DoubletFinder inadvertently passes a 1-column data frame to order().
@@ -529,7 +530,7 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
   message("Running Harmony (assay: ", harmony_assay, ")...")
   TN.combined <- RunHarmony(TN.combined, group.by.vars = "batch",
                             assay.use = harmony_assay, verbose = FALSE)
-  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:30,
+  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:30, seed.use = 42,
                          umap.method = "uwot", metric = "cosine", verbose = FALSE)
   TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = 1:30, verbose = FALSE)
 
@@ -864,7 +865,8 @@ execute_step <- function(step) {
           )
         },
         mc.cores       = n_cores,
-        mc.preschedule = FALSE
+        mc.preschedule = FALSE,
+        mc.set.seed    = TRUE
       )
 
       failed <- which(sapply(results, is.null))
