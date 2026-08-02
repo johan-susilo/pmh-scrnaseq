@@ -77,3 +77,16 @@ save_plot <- function(plot_obj, base_filepath, w = 12, h = 8) {
     })
   }
 }
+
+REQUIRED_COLS_AFTER_02 <- c("cell_type_short", "cell_type_full", "cluster_label")
+
+resolve_res_col <- function(obj, resolution) {
+  md <- colnames(obj@meta.data)
+  for (p in c("SCT_snn_res.", "RNA_snn_res.")) {
+    col <- paste0(p, resolution)
+    if (col %in% md) return(col)
+  }
+  NULL
+}
+
+read_config <- function(path = "config/config.yaml") yaml::read_yaml(path)

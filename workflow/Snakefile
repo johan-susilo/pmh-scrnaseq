@@ -7,6 +7,8 @@ DATADIR = config.get("data_dir", "data")
 INPUT_CSV = config.get("input_csv", "config/input.csv")
 RES = config["preprocessing"]["resolution"]
 CELLTYPES = config["subsetting"]["celltypes"]
+UNCERTAIN_MARGIN = config.get("subsetting", {}).get("uncertain_margin", 0.10)
+UNCERTAIN_ABS_MARGIN = config.get("subsetting", {}).get("uncertain_abs_margin", 0.002)
 
 # List of [type1, type2] pairs to run CellChat on. Defaults to fibroblast/macrophage
 # if not specified in config.yaml under `cellchat: pairs:`.
@@ -15,6 +17,8 @@ CELLCHAT_OUTPUTS = [
     os.path.join(OUTDIR, "04_cellchat", f"{t1}_{t2}", f"{t1}_{t2}_cellchat.rds")
     for t1, t2 in CELLCHAT_PAIRS
 ]
+
+
 
 rule all:
     input:
@@ -113,16 +117,19 @@ rule detail_annotation:
     log:
         os.path.join(OUTDIR, "logs", "04_detail_annotation_{celltype}.log")
     params:
-        outdir = os.path.join(OUTDIR, "03_subsets")
+        outdir = os.path.join(OUTDIR, "03_subsets"),
+        margin = UNCERTAIN_MARGIN,
+        abs_margin = UNCERTAIN_ABS_MARGIN
     shell:
         """
         eval "$(mamba shell hook --shell bash)"
         mamba activate seurat_env
-
         Rscript workflow/scripts/04_detail_annotation.R \
             -i {input.subset_rds} \
             -c {wildcards.celltype} \
-            -o {params.outdir} &> {log}
+            -o {params.outdir} \
+            --uncertain_margin {params.margin} \
+            --uncertain_abs_margin {params.abs_margin} &> {log}
         """
 
 rule dge:

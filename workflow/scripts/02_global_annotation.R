@@ -49,7 +49,8 @@ option_list <- list(
   make_option(c("--tissue"),           type = "character", default = "skin",
               help = "Tissue type for scCATCH [default: skin]"),
   make_option(c("-r", "--resolution"), type = "character", default = "0.2",
-              help = "Clustering resolution [default: 0.2]")
+              help = "Clustering resolution [default: 0.2]"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 
 opt    <- parse_args(OptionParser(option_list = option_list))
@@ -431,6 +432,8 @@ run_celliD <- function(seurat_object) {
   message("\n============================================================")
   message("Starting CelliD Annotation")
   message("============================================================")
+
+  set.seed(opt$seed)
 
   if (file.exists(file.path(output_dirs$celliD, "CelliD_PanglaoDB_summary.tsv"))) {
     message("CelliD results already exist. Skipping.")

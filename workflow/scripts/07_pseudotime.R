@@ -27,7 +27,10 @@ option_list <- list(
   make_option(c("-o", "--output"), type = "character", default = "output/pseudotime",
               help = "Output directory [default: output/pseudotime]"),
   make_option(c("--method"), type = "character", default = "monocle3",
-              help = "Trajectory inference method: monocle3 [default: monocle3]")
+              help = "Trajectory inference method: monocle3 [default: monocle3]"),
+  make_option(c("--root_state"), type = "character", default = "NULL",
+              help = "Root cluster (Detailed_Label) for pseudotime ordering. Use 'NULL' to auto-detect the cluster with the highest Healthy proportion [default: NULL, matches config.yaml trajectory.root_state]"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 
 parser <- OptionParser(option_list = option_list)
@@ -60,6 +63,44 @@ safe_save_pdf <- function(plot_obj, filepath, w = 15, h = 15) {
     message("Warning: Failed to save plot ", filepath, ": ", conditionMessage(e))
     if (length(dev.list()) > 0) dev.off()
   })
+}
+
+# Determine the root cluster for pseudotime ordering -------------------------
+# If --root_state is "NULL" (the default, matching config.yaml), auto-detect
+# the cluster with the highest proportion of Healthy cells. Otherwise use the
+# cluster name given on the CLI. Must be called BEFORE clusters are renamed
+# to "C0", "C1", ... below, since it operates on the original Detailed_Label
+# values and the Condition metadata column.
+determine_root_cluster <- function(obj, selected_clusters, root_state) {
+  if (is.null(root_state) || toupper(trimws(root_state)) == "NULL") {
+    message("--root_state not specified — auto-detecting cluster with highest Healthy proportion...")
+    if (!"Condition" %in% colnames(obj@meta.data)) {
+      warning("No 'Condition' column found in metadata; falling back to the first selected cluster as root.")
+      return(selected_clusters[1])
+    }
+    md <- obj@meta.data
+    md$cluster_id <- as.character(Idents(obj))
+    props <- md %>%
+      dplyr::filter(cluster_id %in% selected_clusters) %>%
+      dplyr::group_by(cluster_id) %>%
+      dplyr::summarise(healthy_prop = mean(Condition == "Healthy", na.rm = TRUE),
+                        n_cells = dplyr::n(), .groups = "drop") %>%
+      dplyr::arrange(dplyr::desc(healthy_prop))
+    if (nrow(props) == 0) {
+      warning("Could not compute Healthy proportions for any selected cluster; falling back to the first selected cluster.")
+      return(selected_clusters[1])
+    }
+    message("Healthy proportion by cluster:")
+    message(paste(capture.output(print(props)), collapse = "\n"))
+    return(props$cluster_id[1])
+  }
+
+  root_state <- trimws(root_state)
+  if (!(root_state %in% selected_clusters)) {
+    stop("--root_state '", root_state, "' is not among the selected clusters: ",
+         paste(selected_clusters, collapse = ", "))
+  }
+  root_state
 }
 
 # Load and subset data ------------------------------------------------------
@@ -107,28 +148,20 @@ if (opt$all_clusters) {
 
 TN.subset$clusters <- as.character(Idents(TN.subset))
 
+# Determine root cluster (config: trajectory.root_state) — must happen BEFORE
+# renaming to C0/C1/... below, since Idents(TN.subset) still holds the
+# original Detailed_Label values at this point.
+root_cluster_original <- determine_root_cluster(TN.subset, selected_clusters, opt$root_state)
+message("Root cluster (original label): ", root_cluster_original)
+
 # Plot the subset
 message("\nGenerating UMAP plot of selected clusters...")
 p_umap <- DimPlot(TN.subset, reduction = "umap", label = TRUE, pt.size = 0.8) +
   ggtitle("Selected Clusters for Pseudotime")
 safe_save_pdf(p_umap, file.path(output_dir, "subset_umap.pdf"))
 
-# Rename clusters for clarity
-message("\nRenaming cluster identities...")
-cluster_names <- paste0("C", selected_clusters)
-names(cluster_names) <- levels(TN.subset)
-TN.subset <- RenameIdents(TN.subset, cluster_names)
-
-# Update metadata cluster labels
-if ("clusters" %in% colnames(TN.subset@meta.data)) {
-  original_levels <- levels(TN.subset@meta.data$clusters)
-  new_levels <- paste0("C", selected_clusters)
-  # Create mapping for all possible levels
-  full_mapping <- setNames(paste0("C", 0:(length(original_levels)-1)), original_levels)
-  levels(TN.subset@meta.data$clusters) <- full_mapping[original_levels]
-}
-
-message("Cluster renaming complete")
+root_cluster <- root_cluster_original
+message("Using root cluster: ", root_cluster)
 
 # Convert to Monocle3 format ------------------------------------------------
 message("\n============================================================")
@@ -188,6 +221,7 @@ cds@clusters$UMAP$partitions <- recreate_partition
 message("\nLearning trajectory graph on imported UMAP...")
 
 # Run learn_graph directly on the imported Seurat layout
+set.seed(opt$seed)
 cds <- learn_graph(cds, use_partition = FALSE)
 
 message("Plotting trajectory...")
@@ -213,10 +247,7 @@ safe_save_pdf(p_trajectory, file.path(output_dir, "trajectory_by_cluster.pdf"))
 
 
 message("Ordering cells in pseudotime")
-
-# Set the root to the FIRST cluster you listed in your -c argument
-root_cluster <- selected_clusters[1]
-message("Setting root cluster to: ", root_cluster)
+message("Using root cluster: ", root_cluster)
 
 # Extract the specific cell barcodes that belong to this root cluster
 root_cells <- rownames(colData(cds)[as.character(colData(cds)$clusters) == as.character(root_cluster), ])
@@ -316,7 +347,7 @@ p_time[is.infinite(p_time)] <- NA
 pseudotime_df <- data.frame(
   cell = colnames(cds),
   pseudotime = p_time,
-  cluster = colData(cds)$seurat_clusters
+  cluster = colData(cds)$clusters
 )
 
 # Add sample info if available
@@ -381,6 +412,7 @@ message("Testing genes for pseudotime dependence using graph_test...")
 
 # Use graph_test to find genes that vary along the trajectory
 tryCatch({
+  set.seed(opt$seed)
   gene_fits <- graph_test(cds, neighbor_graph = "principal_graph", cores = 1)
 
   # Filter significant genes

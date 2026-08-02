@@ -14,6 +14,9 @@ data_dir: "data"
 # Path to the sample metadata CSV (columns: sample_names, ident1, ident2)
 input_csv: "config/input.csv"
 
+reproducibility:
+  random_seed: 42
+
 # ------------------------------------------------------------------------------
 # 2. Pipeline Parameters: Global Preprocessing (01_preprocessing.R)
 # ------------------------------------------------------------------------------
@@ -25,6 +28,8 @@ preprocessing:
   max_mt: 30
   use_sct: true
   batch_var: "orig.ident2"
+  pcs_local: 30       # Extracted from hardcoded 1:30
+  pcs_global: 50      # Extracted from hardcoded npcs = 50
 
 # ------------------------------------------------------------------------------
 # 3. Pipeline Parameters: Subsetting
@@ -35,6 +40,16 @@ subsetting:
     - "macrophage"
     - "Mast"
     - "keratinocyte"
+  pcs: 20             # Extracted from hardcoded pcs_to_use
+  resolutions: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+  # Uncertain-call thresholds for 04_detail_annotation.R (blended margin: the
+  # cluster is called Uncertain unless the gap between the top-scoring and
+  # second-best module score clears max(uncertain_abs_margin,
+  # uncertain_margin * top_score)). Explicitly set here instead of relying on
+  # the Snakefile default, since the relative margin alone is unreachable
+  # once AddModuleScore output sits near/below zero.
+  uncertain_margin: 0.10       # relative floor, applied when top score is large
+  uncertain_abs_margin: 0.002  # absolute floor, applied when top score is small/near zero
 
     
 # ------------------------------------------------------------------------------
@@ -64,6 +79,7 @@ trajectory:
 # type1/type2 must match folder names under 03_subsets (i.e. entries in
 # subsetting.celltypes above) and both must have a *_detailed_annotated.rds.
 cellchat:
+  min_cells: 10       # Extracted from filterCommunication
+  pval_thresh: 0.05   # Extracted from subsetCommunication
   pairs:
     - ["fibroblast", "macrophage"]
-    # - ["Mast", "keratinocyte"]   # uncomment / add more pairs as needed

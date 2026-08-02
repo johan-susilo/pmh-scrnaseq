@@ -26,7 +26,12 @@ suppressPackageStartupMessages({
 # ==============================================================================
 option_list <- list(
   make_option(c("-i", "--indir"), type = "character", default = NULL,
-              help = "Base '03_subsets' directory containing one folder per celltype (same --indir as 05_dge.R)")
+              help = "Base '03_subsets' directory containing one folder per celltype (same --indir as 05_dge.R)"),
+  make_option(c("--logfc_cutoff"), type = "numeric", default = 0.5,
+              help = "Absolute log2FoldChange cutoff for calling a DE gene significant [default: 0.5, matches config.yaml pathway.logfc_cutoff]"),
+  make_option(c("--pval_cutoff"), type = "numeric", default = 0.05,
+              help = "Adjusted p-value cutoff for enrichGO/enrichKEGG and gene selection [default: 0.05, matches config.yaml pathway.pval_cutoff]"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
 
@@ -42,7 +47,8 @@ base_subset_dir <- opt$indir
 # ==============================================================================
 # 1. Define the clusterProfiler Analysis Function
 # ==============================================================================
-run_pathway_analysis <- function(csv_path, out_base_dir, cell_type) {
+run_pathway_analysis <- function(csv_path, out_base_dir, cell_type,
+                                  logfc_cutoff = 0.5, pval_cutoff = 0.05) {
 
   # Extract just the comparison name for titling/saving.
   # cell_type is now supplied by the caller (the outer folder loop) rather
@@ -78,11 +84,11 @@ run_pathway_analysis <- function(csv_path, out_base_dir, cell_type) {
 
   # --- STEP 2: Extract Significant Upregulated and Downregulated Genes ---
   genes_up <- dge_data %>%
-    filter(log2FoldChange > 1 & padj < 0.05) %>%
+    filter(log2FoldChange > logfc_cutoff & padj < pval_cutoff) %>%
     pull(ENTREZID)
 
   genes_down <- dge_data %>%
-    filter(log2FoldChange < -1 & padj < 0.05) %>%
+    filter(log2FoldChange < -logfc_cutoff & padj < pval_cutoff) %>%
     pull(ENTREZID)
 
   # Create a named list for clusterProfiler's compareCluster
@@ -107,8 +113,8 @@ run_pathway_analysis <- function(csv_path, out_base_dir, cell_type) {
       OrgDb = org.Hs.eg.db,
       ont = "BP",
       pAdjustMethod = "BH",
-      pvalueCutoff = 0.05,
-      qvalueCutoff = 0.05,
+      pvalueCutoff = pval_cutoff,
+      qvalueCutoff = pval_cutoff,
       readable = TRUE # Automatically translates Entrez back to human-readable Symbols for the plot!
     )
   }, error = function(e) {
@@ -144,8 +150,8 @@ run_pathway_analysis <- function(csv_path, out_base_dir, cell_type) {
       universe = universe_entrez,
       organism = "hsa",
       pAdjustMethod = "BH",
-      pvalueCutoff = 0.05,
-      qvalueCutoff = 0.05
+      pvalueCutoff = pval_cutoff,
+      qvalueCutoff = pval_cutoff
     )
   }, error = function(e) {
     message("   - KEGG failed: ", conditionMessage(e))
@@ -214,7 +220,9 @@ for (cell_type in cell_type_folders) {
   for (csv_file in dge_files) {
     # If the analysis crashes on one file, tryCatch ensures the loop continues to the next!
     tryCatch({
-      run_pathway_analysis(csv_file, base_subset_dir, cell_type)
+      run_pathway_analysis(csv_file, base_subset_dir, cell_type,
+                            logfc_cutoff = opt$logfc_cutoff,
+                            pval_cutoff  = opt$pval_cutoff)
     }, error = function(e) {
       message(paste("   [ERROR] Failed to process", basename(csv_file), ":", conditionMessage(e)))
     })

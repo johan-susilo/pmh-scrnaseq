@@ -38,7 +38,6 @@ suppressPackageStartupMessages({
 })
 
 source("workflow/scripts/00_utils.R")
-set.seed(42)
 RNGkind("L'Ecuyer-CMRG")
 options(future.globals.maxSize = 100 * 1024^3)
 
@@ -66,7 +65,7 @@ if (!exists("cc.genes")) {
 
 option_list <- list(
   make_option(c("-f", "--file"),       type = "character", help = "Input CSV (columns: sample_names, ident1, ident2)"),
-  make_option(c("-r", "--resolution"), type = "numeric",   default = 0.4,          help = "Clustering resolution [default: 0.4]"),
+  make_option(c("-r", "--resolution"), type = "numeric",   default = 0.2,          help = "Clustering resolution [default: 0.2, matches config.yaml preprocessing.resolution]"),
   make_option(c("-d", "--datadir"),    type = "character", default = ".",           help = "Base directory with sample folders [default: .]"),
   make_option(c("-s", "--step"),       type = "character", help = "Pipeline step: read_csv, process, integrate, plot, all"),
   make_option(c("-o", "--output"),     type = "character", default = NULL,          help = "Base output directory"),
@@ -76,7 +75,10 @@ option_list <- list(
   make_option("--max_features",        type = "integer",   default = 5000,          help = "Max features per cell [default: 5000]"),
   make_option("--max_mt",              type = "numeric",   default = 30,            help = "Max mitochondrial % [default: 30]"),
   make_option("--use_sct",             type = "logical",   default = TRUE,          help = "Use SCTransform normalization [default: TRUE]"),
-  make_option("--batch_var",           type = "character", default = "orig.ident2", help = "Batch variable for Harmony [default: orig.ident2]")
+  make_option("--batch_var", type = "character", default = "orig.ident2", help = "Batch variable for Harmony [default: orig.ident2]"),
+  make_option(c("--pcs_local"), type = "integer", default = 30, help = "Number of PCs for per-sample normalization"),
+  make_option(c("--pcs_global"), type = "integer", default = 50, help = "Number of PCs for global integration"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 
 opt        <- parse_args(OptionParser(option_list = option_list))
@@ -222,14 +224,14 @@ normalize_and_pca <- function(seur_obj, use_sct, n_pcs = 30) {
     message("Running SCTransform v2...")
     seur_obj <- SCTransform(seur_obj, vars.to.regress = "percent.mt",
                             method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
-    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = n_pcs, verbose = FALSE)
+    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = opt$pcs_global, verbose = FALSE)
   } else {
     message("Running LogNormalize pipeline...")
     seur_obj <- seur_obj %>%
       NormalizeData() %>%
       FindVariableFeatures() %>%
       ScaleData(vars.to.regress = "percent.mt") %>%
-      RunPCA(npcs = n_pcs, verbose = FALSE)
+      RunPCA(npcs = opt$pcs_global, verbose = FALSE)
   }
   seur_obj
 }
@@ -325,14 +327,14 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
                    paste0("QC (Pre-filtered) — ", sample_name))
 
     # -- Normalisation + PCA --
-    seur_obj <- normalize_and_pca(seur_obj, use_sct, n_pcs = 30)
-    save_plot(ElbowPlot(seur_obj, ndims = 30), plot_path("_03_elbow"))
+    seur_obj <- normalize_and_pca(seur_obj, use_sct, n_pcs = opt$pcs_local)
+    save_plot(ElbowPlot(seur_obj, ndims = opt$pcs_local), plot_path("_03_elbow"))
 
     # -- Clustering + UMAP (needed for DoubletFinder) --
     seur_obj <- seur_obj %>%
-      FindNeighbors(dims = 1:30) %>%
-      FindClusters() %>%
-      RunUMAP(dims = 1:30, umap.method = "uwot", metric = "cosine")
+      FindNeighbors(dims = 1:opt$pcs_local) %>%
+      FindClusters(random.seed = opt$seed) %>%
+      RunUMAP(dims = 1:opt$pcs_local, seed.use = opt$seed, umap.method = "uwot", metric = "cosine")
     save_plot(DimPlot(seur_obj, reduction = "umap", label = TRUE),
                    plot_path("_04_umap_initial"))
 
@@ -512,14 +514,14 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     TN.combined <- SCTransform(TN.combined, assay = "RNA", vars.to.regress = vars_reg,
                                method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
     TN.combined <- PrepSCTFindMarkers(TN.combined, assay = "SCT", verbose = FALSE)
-    TN.combined <- RunPCA(TN.combined, assay = "SCT", npcs = 50, verbose = FALSE)
+    TN.combined <- RunPCA(TN.combined, assay = "SCT", npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
     harmony_assay <- "SCT"
   } else {
     message("Global LogNormalize pipeline...")
     TN.combined <- NormalizeData(TN.combined, verbose = FALSE) %>%
       FindVariableFeatures(nfeatures = 2000, verbose = FALSE) %>%
       ScaleData(vars.to.regress = "percent.mt", features = rownames(TN.combined), verbose = FALSE) %>%
-      RunPCA(npcs = 50, verbose = FALSE)
+      RunPCA(npcs = opt$pcs_global, verbose = FALSE)
     harmony_assay <- "RNA"
   }
 
@@ -527,17 +529,20 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
                  file.path(output_dirs$plots, "TNcombined_elbow"))
 
   # Harmony → UMAP → clustering
+  # Harmony → UMAP → clustering
   message("Running Harmony (assay: ", harmony_assay, ")...")
   TN.combined <- RunHarmony(TN.combined, group.by.vars = "batch",
                             assay.use = harmony_assay, verbose = FALSE)
-  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:30, seed.use = 42,
+  
+  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, seed.use = opt$seed,
                          umap.method = "uwot", metric = "cosine", verbose = FALSE)
-  TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = 1:30, verbose = FALSE)
+                         
+  TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, verbose = FALSE)
 
   resolutions <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8)
   message("Clustering at resolutions: ", paste(resolutions, collapse = ", "))
-  TN.combined <- FindClusters(TN.combined, resolution = resolutions, verbose = FALSE)
-
+  TN.combined <- FindClusters(TN.combined, resolution = resolutions, random.seed = opt$seed, verbose = FALSE)
+  
   cluster_prefix <- paste0(harmony_assay, "_snn_res.")
 
   # Clustree

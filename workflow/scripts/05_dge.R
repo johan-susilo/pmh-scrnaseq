@@ -28,7 +28,8 @@ option_list <- list(
   make_option(c("-i", "--indir"), type = "character", default = NULL,
               help = "Base '03_subsets' directory containing one folder per celltype"),
   make_option(c("-c", "--celltypes"), type = "character", default = NULL,
-              help = "Optional comma-separated whitelist of celltype folder names to process (default: all subfolders of --indir)")
+              help = "Optional comma-separated whitelist of celltype folder names to process (default: all subfolders of --indir)"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
 

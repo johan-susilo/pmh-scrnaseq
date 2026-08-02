@@ -19,7 +19,10 @@ option_list <- list(
   make_option(c("-i", "--input"), type = "character", help = "Path to globally annotated RDS (e.g., TN.combined_annotated.rds)"),
   make_option(c("-c", "--celltype"), type = "character", help = "Target cell type string to subset (e.g., 'fibroblast')"),
   make_option(c("-o", "--outdir"), type = "character", help = "Base output directory for subset clusters"),
-  make_option(c("-r", "--resolution"), type = "numeric", default = 0.2, help = "Default clustering resolution for the subset")
+  make_option(c("-r", "--resolution"), type = "numeric", default = 0.2, help = "Default clustering resolution for the subset"),
+  make_option(c("--pcs"), type = "integer", default = 20, help = "Number of PCs for subsetting"),
+  make_option(c("--resolutions"), type = "character", default = "0.2,0.4,0.6,0.8,1.0,1.2", help = "Comma-separated resolutions to calculate"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
 
@@ -28,6 +31,13 @@ if (is.null(opt$input) || is.null(opt$celltype) || is.null(opt$outdir)) {
 }
 
 PROOF_GENES <- c("LUM", "DCN", "COL1A1", "KRT14", "KRT1", "PTPRC", "CD68", "PECAM1", "VWF")
+
+# Parse --resolutions ("0.2,0.4,0.6,0.8,1.0,1.2") into a numeric vector once.
+# This is what actually gets passed down into FindClusters().
+resolutions_vec <- as.numeric(trimws(strsplit(opt$resolutions, ",")[[1]]))
+if (any(is.na(resolutions_vec))) {
+  stop("Could not parse --resolutions into numeric values: ", opt$resolutions)
+}
 
 # ==============================================================================
 # 2. HELPER FUNCTIONS & CORE PROCESSING
@@ -48,12 +58,26 @@ create_proportion_barplot <- function(seurat_obj, group_col, title) {
 run_dim_reduction <- function(sub_obj, resolutions) {
   DefaultAssay(sub_obj) <- "RNA"
   sub_obj <- SCTransform(sub_obj, method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
-  sub_obj <- RunPCA(sub_obj, assay = "SCT", verbose = FALSE)
+  sub_obj <- RunPCA(sub_obj, assay = "SCT", seed.use = opt$seed, verbose = FALSE)
   sub_obj <- RunHarmony(sub_obj, group.by.vars = "orig.ident2", assay.use = "SCT", verbose = FALSE)
-  pcs_to_use <- min(20, ncol(sub_obj) - 1)
-  sub_obj <- RunUMAP(sub_obj, reduction = "harmony", dims = 1:pcs_to_use, verbose = FALSE)
+
+  # Clamp requested PCs to what's actually available, and use the SAME pcs
+  # for both UMAP and the neighbor graph (previously RunUMAP used opt$pcs
+  # unclamped while FindNeighbors used a separately-clamped pcs_to_use).
+  pcs_to_use <- min(opt$pcs, ncol(sub_obj) - 1)
+
+  sub_obj <- RunUMAP(sub_obj, reduction = "harmony", dims = 1:pcs_to_use, seed.use = opt$seed, verbose = FALSE)
+
+  # FindNeighbors MUST run before FindClusters — FindClusters consumes the
+  # SNN graph FindNeighbors builds. The original order (FindClusters before
+  # FindNeighbors) had no graph to cluster on.
   sub_obj <- FindNeighbors(sub_obj, reduction = "harmony", dims = 1:pcs_to_use, verbose = FALSE)
-  sub_obj <- FindClusters(sub_obj, resolution = resolutions, verbose = FALSE)
+
+  # `resolutions` here is the function parameter (parsed to numeric by the
+  # caller), not the raw opt$resolutions CLI string — FindClusters needs a
+  # numeric vector, not "0.2,0.4,0.6,0.8,1.0,1.2" as literal text.
+  sub_obj <- FindClusters(sub_obj, resolution = resolutions, random.seed = opt$seed, verbose = FALSE)
+
   return(sub_obj)
 }
 
@@ -68,8 +92,8 @@ assign_metadata <- function(sub_obj) {
   return(sub_obj)
 }
 
-process_subset <- function(seurat_obj, subset_clusters, prefix, out_base_dir, 
-                           resolutions = seq(0.2, 1.2, by = 0.2), default_res = 0.2) {
+process_subset <- function(seurat_obj, subset_clusters, prefix, out_base_dir,
+                           resolutions = resolutions_vec, default_res = 0.2) {
   message(sprintf("\n=== Starting Pipeline for: %s ===", toupper(prefix)))
   
   out_dirs <- list(
@@ -181,5 +205,6 @@ subset_obj <- process_subset(
   subset_clusters = target_idents, 
   prefix = opt$celltype, 
   out_base_dir = opt$outdir,
+  resolutions = resolutions_vec,
   default_res = opt$resolution
 )

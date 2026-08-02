@@ -39,7 +39,10 @@ option_list <- list(
   make_option(c("--type1"), type = "character", help = "Short name for the first celltype (used for prefixes/labels, e.g. 'fibroblast')"),
   make_option(c("--obj2"), type = "character", help = "Path to second celltype's *_detailed_annotated.rds"),
   make_option(c("--type2"), type = "character", help = "Short name for the second celltype (e.g. 'macrophage')"),
-  make_option(c("--outdir"), type = "character", help = "Output directory")
+  make_option(c("--outdir"), type = "character", help = "Output directory"),
+  make_option(c("--min_cells"), type = "integer", default = 10, help = "Minimum number of cells required per group"),
+  make_option(c("--pval_thresh"), type = "numeric", default = 0.05, help = "P-value threshold for significant interactions"),
+  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
 
@@ -139,6 +142,7 @@ gc()
 # 4. CELLCHAT WORKFLOW (BYPASSING INTERNAL BUGS)
 # ==============================================================================
 message("Initializing CellChat (bypassing Seurat v5 internal conflicts)...")
+set.seed(opt$seed)
 
 data.input <- tryCatch({
   GetAssayData(combined, assay = "RNA", layer = "data")
@@ -158,7 +162,7 @@ cellchat <- subsetData(cellchat)
 cellchat <- identifyOverExpressedGenes(cellchat)
 cellchat <- identifyOverExpressedInteractions(cellchat)
 cellchat <- computeCommunProb(cellchat)
-cellchat <- filterCommunication(cellchat, min.cells = 10)
+cellchat <- filterCommunication(cellchat, min.cells = opt$min_cells)
 cellchat <- computeCommunProbPathway(cellchat)
 cellchat <- aggregateNet(cellchat)
 
@@ -222,7 +226,7 @@ if (length(type1_disease_groups) > 0 && length(type2_groups) > 0) {
         sources.use  = type1_disease_groups,
         targets.use  = type2_groups,
         remove.isolate = TRUE,
-        thresh = 0.05) +
+        thresh = opt$pval_thresh) +
         ggtitle(sprintf("PMH: Disease %s -> %s", label1, label2)))
   dev.off()
 }
@@ -233,7 +237,7 @@ if (length(type2_groups) > 0 && length(type1_disease_groups) > 0) {
         sources.use  = type2_groups,
         targets.use  = type1_disease_groups,
         remove.isolate = TRUE,
-        thresh = 0.05) +
+        thresh = opt$pval_thresh) +
         ggtitle(sprintf("PMH: %s -> Disease %s", label2, label1)))
   dev.off()
 }
@@ -241,10 +245,12 @@ if (length(type2_groups) > 0 && length(type1_disease_groups) > 0) {
 # --- Top interactions table ---
 df_1_to_2 <- subsetCommunication(cellchat,
   sources.use = type1_disease_groups,
-  targets.use = type2_groups)
+  targets.use = type2_groups,
+  thresh = opt$pval_thresh)
 df_2_to_1 <- subsetCommunication(cellchat,
   sources.use = type2_groups,
-  targets.use = type1_disease_groups)
+  targets.use = type1_disease_groups,
+  thresh = opt$pval_thresh)
 
 write.csv(df_1_to_2, file.path(opt$outdir, sprintf("PMH_%sDisease_to_%s_interactions.csv", label1, label2)), row.names = FALSE)
 write.csv(df_2_to_1, file.path(opt$outdir, sprintf("PMH_%s_to_%sDisease_interactions.csv", label2, label1)), row.names = FALSE)
