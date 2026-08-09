@@ -1,16 +1,21 @@
 #!/usr/bin/env Rscript
-# Usage: Rscript preprocessing_clean.R -f input.csv -d /path/to/data -s all -o /path/to/output -c 8
+# Usage: Rscript 01_preprocessing.R -f input.csv -d /path/to/data -s all -o results --config config/config.yaml
 #
 # Steps:
 #   read_csv   – parse input.csv and cache samples_df.rds
 #   process    – QC, doublet removal, per-sample normalisation  (parallel across samples)
-#   integrate  – merge + Harmony integration + multi-res clustering → TN.combined_dim30.rds
+#   integrate  - merge + Harmony integration + multi-res clustering -> TN.combined_dim30.rds
 #   plot       – UMAP / heatmap / proportion plots (uses numeric cluster labels)
-#   all        – read_csv → process → integrate → plot
+#   all        – read_csv -> process -> integrate -> plot
 #
-# Annotation is handled by cell_annotation.R, which reads TN.combined_dim30.rds,
-# applies consensus labels, updates that file in-place, and writes
-# TN.combined_annotated.rds plus annotated UMAP plots.
+# Annotation is handled by 02_global_annotation.R, which reads
+# TN.combined_dim30.rds, applies consensus labels, and writes TN.combined_annotated.rds.
+#
+# CONTRACT WITH 02: this script must always produce
+#   <outdir>/TN.combined_dim30.rds  (<outdir> = whatever -o this rule is given, used as-is)
+# with clustering columns named "<assay>_snn_res.<r>" for every resolution in
+# preprocessing.resolution / the --resolution flag, resolvable via
+# resolve_res_col() in 00_utils.R.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -48,7 +53,6 @@ xtfrm.data.frame <- function(x) {
   stop("cannot xtfrm data frames")
 }
 
-# Load cell cycle genes
 if (!exists("cc.genes")) {
   tryCatch({
     utils::data("cc.genes", package = "Seurat")
@@ -61,88 +65,91 @@ if (!exists("cc.genes")) {
 
 # ==============================================================================
 # COMMAND-LINE INTERFACE
+# All numeric/logical defaults are NULL here and resolved AFTER config.yaml is
+# loaded (see "RESOLVE DEFAULTS" below), so config.yaml is the single source
+# of truth and a CLI flag is only needed to override it.
 # ==============================================================================
 
 option_list <- list(
   make_option(c("-f", "--file"),       type = "character", help = "Input CSV (columns: sample_names, ident1, ident2)"),
-  make_option(c("-r", "--resolution"), type = "numeric",   default = 0.2,          help = "Clustering resolution [default: 0.2, matches config.yaml preprocessing.resolution]"),
-  make_option(c("-d", "--datadir"),    type = "character", default = ".",           help = "Base directory with sample folders [default: .]"),
+  make_option(c("-d", "--datadir"),    type = "character", default = "data", help = "Base directory with sample folders"),
   make_option(c("-s", "--step"),       type = "character", help = "Pipeline step: read_csv, process, integrate, plot, all"),
-  make_option(c("-o", "--output"),     type = "character", default = NULL,          help = "Base output directory"),
-  make_option(c("-c", "--cores"),      type = "integer",   default = NULL,          help = "Cores for parallel sample processing [default: all available - 1]"),
-  make_option("--doublet_rate",        type = "numeric",   default = 0.08,          help = "Expected doublet rate [default: 0.08]"),
-  make_option("--min_features",        type = "integer",   default = 200,           help = "Min features per cell [default: 200]"),
-  make_option("--max_features",        type = "integer",   default = 5000,          help = "Max features per cell [default: 5000]"),
-  make_option("--max_mt",              type = "numeric",   default = 30,            help = "Max mitochondrial % [default: 30]"),
-  make_option("--use_sct",             type = "logical",   default = TRUE,          help = "Use SCTransform normalization [default: TRUE]"),
-  make_option("--batch_var", type = "character", default = "orig.ident2", help = "Batch variable for Harmony [default: orig.ident2]"),
-  make_option(c("--pcs_local"), type = "integer", default = 30, help = "Number of PCs for per-sample normalization"),
-  make_option(c("--pcs_global"), type = "integer", default = 50, help = "Number of PCs for global integration"),
-  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
+  make_option(c("-o", "--output"),     type = "character", default = "results", help = "Base output directory"),
+  make_option(c("--config"),           type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
+  make_option(c("-c", "--cores"),      type = "integer",   default = NULL, help = "Cores for parallel sample processing [default: all available - 1]"),
+  make_option(c("-r", "--resolution"), type = "numeric",   default = NULL, help = "Default clustering resolution to use for plotting [config: preprocessing.resolution]"),
+  make_option("--doublet_rate",        type = "numeric",   default = NULL, help = "Expected doublet rate [config: preprocessing.doublet_rate]"),
+  make_option("--min_features",        type = "integer",   default = NULL, help = "Min features per cell [config: preprocessing.min_features]"),
+  make_option("--max_features",        type = "integer",   default = NULL, help = "Max features per cell [config: preprocessing.max_features]"),
+  make_option("--max_mt",              type = "numeric",   default = NULL, help = "Max mitochondrial % [config: preprocessing.max_mt]"),
+  make_option("--use_sct",             type = "logical",   default = NULL, help = "Use SCTransform normalization [config: preprocessing.use_sct]"),
+  make_option("--batch_var",           type = "character", default = NULL, help = "Batch variable for Harmony [config: preprocessing.batch_var]"),
+  make_option(c("--pcs_local"),        type = "integer",   default = NULL, help = "PCs for per-sample normalization [config: preprocessing.pcs_local]"),
+  make_option(c("--pcs_global"),       type = "integer",   default = NULL, help = "PCs for global integration [config: preprocessing.pcs_global]"),
+  make_option(c("--seed"),             type = "integer",   default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
 )
 
-opt        <- parse_args(OptionParser(option_list = option_list))
+opt <- parse_args(OptionParser(option_list = option_list))
+cfg <- get_config(opt$config)
+
+# ---- RESOLVE DEFAULTS: config.yaml first, CLI flag overrides if supplied ----
+`%||%` <- function(a, b) if (is.null(a)) b else a
+opt$resolution    <- opt$resolution    %||% cfg_get(cfg, "preprocessing", "resolution",    default = 0.2)
+opt$doublet_rate  <- opt$doublet_rate  %||% cfg_get(cfg, "preprocessing", "doublet_rate",  default = 0.08)
+opt$min_features  <- opt$min_features  %||% cfg_get(cfg, "preprocessing", "min_features",  default = 200)
+opt$max_features  <- opt$max_features  %||% cfg_get(cfg, "preprocessing", "max_features",  default = 5000)
+opt$max_mt        <- opt$max_mt        %||% cfg_get(cfg, "preprocessing", "max_mt",        default = 30)
+opt$use_sct       <- opt$use_sct       %||% cfg_get(cfg, "preprocessing", "use_sct",       default = TRUE)
+opt$batch_var     <- opt$batch_var     %||% cfg_get(cfg, "preprocessing", "batch_var",     default = "orig.ident2")
+opt$pcs_local     <- opt$pcs_local     %||% cfg_get(cfg, "preprocessing", "pcs_local",     default = 30)
+opt$pcs_global    <- opt$pcs_global    %||% cfg_get(cfg, "preprocessing", "pcs_global",    default = 50)
+opt$seed          <- opt$seed          %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
+if (is.null(opt$file)) opt$file <- cfg_get(cfg, "input_csv", default = NULL)
+
 res_folder <- paste0("res_", opt$resolution)
+set.seed(opt$seed)
 
 # ==============================================================================
 # OUTPUT DIRECTORIES
+#
+# `-o` is used AS-IS -- no extra subfolder is appended here. The Snakemake
+# rule for this script already points `-o` at a stage-specific directory
+# (e.g. .../01_preprocessing); nesting a second "01_integration" folder
+# underneath that silently breaks the fixed output path the rule's `output:`
+# block expects (this caused a MissingOutputException previously -- see the
+# SHARED FILE PATHS note below for the matching filename fix).
 # ==============================================================================
 
-setup_output_dirs <- function(base) {
-  dirs <- list(
-    processed = file.path(base, "processed"),
-    plots     = file.path(base, "plots"),
-    tables    = file.path(base, "tables"),
-    logs      = file.path(base, "logs")
-  )
-  lapply(dirs, dir.create, recursive = TRUE, showWarnings = FALSE)
-  dirs
-}
-
-output_base <- if (!is.null(opt$output) && nzchar(opt$output)) opt$output else "output"
+output_base <- if (!is.null(opt$output) && nzchar(opt$output)) opt$output else "results"
 dir.create(output_base, recursive = TRUE, showWarnings = FALSE)
-output_dirs <- setup_output_dirs(output_base)
-
-# ==============================================================================
-# LOGGING
-# ==============================================================================
-
-log_file <- file.path(output_dirs$logs,
-                      paste0("pipeline_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log"))
-log_conn <- file(log_file, open = "wt")
-sink(log_conn, type = "output", split = TRUE)
-sink(log_conn, type = "message")
-message("Log: ", log_file, " | Started: ", Sys.time())
+output_dirs <- make_stage_dirs(output_base, c("01_per_sample_processed", "02_plots", "03_tables", "logs"))
+# This maps your new neat folders back to the original variables the script expects
+names(output_dirs) <- c("processed", "plots", "tables", "logs")
 
 # ==============================================================================
 # PARALLEL SETUP
-# Sample processing is parallelised with parallel::mclapply.
-# Integration and plotting stay sequential (single shared object; not fork-safe).
 # ==============================================================================
 
-n_cores <- if (!is.null(opt$cores)) {
-  opt$cores
-} else {
-  max(1L, parallel::detectCores(logical = FALSE) - 1L)
-}
+n_cores <- if (!is.null(opt$cores)) opt$cores else max(1L, parallel::detectCores(logical = FALSE) - 1L)
 message("Parallel sample processing: ", n_cores, " core(s)")
 
 # ==============================================================================
 # SHARED FILE PATHS
+#
+# Kept as TN.combined_dim30.rds / _full.rds -- these are the exact names the
+# Snakefile's `output:` blocks and 02_global_annotation.R's `-i` default
+# expect. "dim30" no longer literally reflects opt$pcs_global (which is now
+# config-driven), but renaming is a coordinated Snakefile + downstream-script
+# change, not something to do silently inside this one file.
 # ==============================================================================
 
-integrated_rds <- file.path(output_base, "TN.combined_dim30.rds")
+integrated_full_rds <- file.path(output_base, "TN.combined_dim30_full.rds")
+integrated_rds       <- file.path(output_base, "TN.combined_dim30.rds")
 
 # ==============================================================================
 # HELPER UTILITIES
 # ==============================================================================
 
-pick_colors <- function(n) {
-  if (n <= length(mycolor)) mycolor[1:n] else colorRampPalette(mycolor)(n)
-}
-
-
-# Save a QC violin plot to PDF
 save_qc_violin <- function(seur_obj, sample_id, file_prefix, plot_title) {
   qc_feats <- c("nFeature_RNA", "nCount_RNA", "percent.mt")
   if (!all(qc_feats %in% colnames(seur_obj@meta.data)) || ncol(seur_obj) == 0) {
@@ -163,7 +170,6 @@ save_qc_violin <- function(seur_obj, sample_id, file_prefix, plot_title) {
   })
 }
 
-# Build a QC violin ggplot, grouped by cluster when available
 create_qc_violin_plot <- function(seurat_obj, features, title) {
   if ("seurat_clusters" %in% colnames(seurat_obj@meta.data)) {
     cluster_id <- "seurat_clusters"
@@ -191,12 +197,8 @@ create_qc_violin_plot <- function(seurat_obj, features, title) {
       geom_jitter(size = 0.1, alpha = 0.1, width = 0.2) +
       facet_wrap(~metric, scales = "free", ncol = length(features)) +
       scale_fill_manual(values = colors) +
-      theme_bw(base_size = 12) +
-      theme(legend.position  = "none",
-            plot.title       = element_text(hjust = 0.5, size = 16, face = "bold"),
-            axis.text.x      = element_text(angle = 45, hjust = 1, size = 8),
-            strip.text       = element_text(size = 12, face = "bold"),
-            strip.background = element_rect(fill = "lightgray")) +
+      theme_pipeline(12) +
+      theme(legend.position = "none") +
       labs(title = title, x = "Identity", y = "Value")
   } else {
     qc_data <- seurat_obj@meta.data %>%
@@ -208,44 +210,27 @@ create_qc_violin_plot <- function(seurat_obj, features, title) {
       geom_violin(trim = FALSE, scale = "width") +
       geom_jitter(size = 0.1, alpha = 0.2, width = 0.2) +
       facet_wrap(~metric, scales = "free", ncol = length(features)) +
-      theme_bw(base_size = 12) +
-      theme(legend.position  = "none",
-            plot.title       = element_text(hjust = 0.5, size = 16, face = "bold"),
-            axis.text.x      = element_text(angle = 45, hjust = 1),
-            strip.text       = element_text(size = 12, face = "bold"),
-            strip.background = element_rect(fill = "lightgray")) +
+      theme_pipeline(12) +
+      theme(legend.position = "none") +
       labs(title = title, x = "", y = "Value")
   }
 }
 
-# Normalise + run PCA (SCTransform v2 or LogNormalize)
-normalize_and_pca <- function(seur_obj, use_sct, n_pcs = 30) {
+normalize_and_pca <- function(seur_obj, use_sct) {
   if (isTRUE(use_sct)) {
     message("Running SCTransform v2...")
     seur_obj <- SCTransform(seur_obj, vars.to.regress = "percent.mt",
                             method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
-    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = opt$pcs_global, verbose = FALSE)
+    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
   } else {
     message("Running LogNormalize pipeline...")
     seur_obj <- seur_obj %>%
       NormalizeData() %>%
       FindVariableFeatures() %>%
       ScaleData(vars.to.regress = "percent.mt") %>%
-      RunPCA(npcs = opt$pcs_global, verbose = FALSE)
+      RunPCA(npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
   }
   seur_obj
-}
-
-# Call JoinLayers when available (Seurat v5), silently skip otherwise
-try_join_layers <- function(obj) {
-  if (exists("JoinLayers", where = asNamespace("Seurat"), mode = "function")) {
-    tryCatch(JoinLayers(obj), error = function(e) {
-      message("Warning: JoinLayers failed: ", conditionMessage(e)); obj
-    })
-  } else {
-    message("JoinLayers() not available; skipping")
-    obj
-  }
 }
 
 # ==============================================================================
@@ -278,13 +263,12 @@ read_samples_csv <- function(csv_file) {
 # ==============================================================================
 
 process_sample <- function(sample_name, sample_ident1, sample_ident2,
-                           base_data_dir, out_dirs, use_sct, params) {
+                           base_data_dir, out_dirs, use_sct, params, seed) {
   tryCatch({
     output_rds      <- file.path(out_dirs$processed, paste0(sample_name, "_processed.rds"))
     sample_plot_dir <- file.path(out_dirs$plots, sample_name)
     plot_path       <- function(suffix) file.path(sample_plot_dir, paste0(sample_name, suffix))
 
-    # -- Already done? Ensure SCT flag is present then skip --
     if (file.exists(output_rds)) {
       message("Already processed: ", sample_name)
       tryCatch({
@@ -303,20 +287,18 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
     message("\n===== Processing: ", sample_name, " =====")
     dir.create(sample_plot_dir, recursive = TRUE, showWarnings = FALSE)
 
-    # -- Create Seurat object --
     seur_obj <- CreateSeuratObject(
       counts       = Read10X(data.dir = file.path(base_data_dir, sample_name)),
       project      = sample_name,
       min.cells    = 3,
       min.features = 10
     )
-    message("Dimensions: ", dim(seur_obj)[1], " features × ", dim(seur_obj)[2], " cells")
+    message("Dimensions: ", dim(seur_obj)[1], " features x ", dim(seur_obj)[2], " cells")
     seur_obj[["percent.mt"]] <- PercentageFeatureSet(seur_obj, pattern = "^MT-")
 
     save_qc_violin(seur_obj, sample_name, plot_path("_01_qc_unfiltered"),
-                   paste0("QC (Unfiltered) — ", sample_name))
+                   paste0("QC (Unfiltered) - ", sample_name))
 
-    # -- Pre-filter (remove empty droplets before DoubletFinder) --
     n_before <- ncol(seur_obj)
     seur_obj <- subset(seur_obj,
                        subset = nFeature_RNA > 200 & nFeature_RNA < 10000 & percent.mt < 50)
@@ -324,29 +306,32 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
             " empty droplets; keeping ", ncol(seur_obj))
 
     save_qc_violin(seur_obj, sample_name, plot_path("_02_qc_prefiltered"),
-                   paste0("QC (Pre-filtered) — ", sample_name))
+                   paste0("QC (Pre-filtered) - ", sample_name))
 
-    # -- Normalisation + PCA --
-    seur_obj <- normalize_and_pca(seur_obj, use_sct, n_pcs = opt$pcs_local)
+    seur_obj <- normalize_and_pca(seur_obj, use_sct)
     save_plot(ElbowPlot(seur_obj, ndims = opt$pcs_local), plot_path("_03_elbow"))
 
-    # -- Clustering + UMAP (needed for DoubletFinder) --
     seur_obj <- seur_obj %>%
       FindNeighbors(dims = 1:opt$pcs_local) %>%
-      FindClusters(random.seed = opt$seed) %>%
-      RunUMAP(dims = 1:opt$pcs_local, seed.use = opt$seed, umap.method = "uwot", metric = "cosine")
+      FindClusters(random.seed = seed) %>%
+      RunUMAP(dims = 1:opt$pcs_local, seed.use = seed, umap.method = "uwot", metric = "cosine")
     save_plot(DimPlot(seur_obj, reduction = "umap", label = TRUE),
                    plot_path("_04_umap_initial"))
 
     # -- DoubletFinder --
-    message("Running DoubletFinder pK sweep...")
+    # set.seed() here is the fix: paramSweep()/find.pK() previously had no
+    # seed control, so the chosen pK (and therefore which cells get called
+    # doublets, and everything computed downstream of that) could vary
+    # between runs even with opt$seed fixed everywhere else.
+    message("Running DoubletFinder pK sweep (seed = ", seed, ")...")
+    set.seed(seed)
     sweep.res <- paramSweep(seur_obj, PCs = 1:20, sct = isTRUE(use_sct))
     bcmvn    <- find.pK(summarizeSweep(sweep.res, GT = FALSE))
 
     save_plot(
       ggplot(bcmvn, aes(pK, BCmetric, group = 1)) +
         geom_point() + geom_line() +
-        ggtitle(paste0("pK — ", sample_name)) + theme_bw(),
+        ggtitle(paste0("pK - ", sample_name)) + theme_bw(),
       plot_path("_05_pk")
     )
 
@@ -356,7 +341,7 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
                             (1 - homotypic.prop))
     message("Optimal pK: ", pK, "  |  Adjusted expected doublets: ", nExp_adj)
 
-    # New code
+    set.seed(seed)
     seur_obj <- doubletFinder(seur_obj, PCs = 1:20, pN = 0.25, pK = pK,
                               nExp = nExp_adj, sct = isTRUE(use_sct))
 
@@ -366,7 +351,7 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
 
     save_plot(
       DimPlot(seur_obj, reduction = "umap", group.by = DF_col, cols = doublet_color) +
-        ggtitle(paste0("Doublets (before removal) — ", sample_name)),
+        ggtitle(paste0("Doublets (before removal) - ", sample_name)),
       plot_path("_06_doublets_before")
     )
     message("Doublet counts:"); print(table(seur_obj@meta.data[[DF_col]]))
@@ -376,15 +361,23 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
 
     save_plot(
       DimPlot(seur_obj, reduction = "umap", group.by = DF_col, cols = doublet_color) +
-        ggtitle(paste0("Doublets (after removal) — ", sample_name)),
+        ggtitle(paste0("Doublets (after removal) - ", sample_name)),
       plot_path("_07_doublets_after")
     )
     save_qc_violin(seur_obj, sample_name, plot_path("_08_qc_post_doublet"),
-                   paste0("QC (Post-Doublet) — ", sample_name))
+                   paste0("QC (Post-Doublet) - ", sample_name))
 
-    # -- Final QC filter --
     seur_obj$orig.ident1 <- sample_ident1
     seur_obj$orig.ident2 <- sample_ident2
+    
+    seur_obj$Detailed_Condition <- case_when(
+      grepl("HTY|UA", sample_ident2, ignore.case = TRUE) ~ "Healthy",
+      grepl("AC", sample_ident2, ignore.case = TRUE) ~ "Acute",
+      grepl("CH", sample_ident2, ignore.case = TRUE) ~ "Chronic",
+      TRUE ~ "Unknown"
+    )
+    seur_obj$Condition <- ifelse(seur_obj$Detailed_Condition == "Healthy", "Healthy", "PMH")
+
     n_before <- ncol(seur_obj)
     seur_obj <- subset(seur_obj,
                        subset = nFeature_RNA > params$min_features &
@@ -394,10 +387,10 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
             " cells; keeping ", ncol(seur_obj))
 
     save_qc_violin(seur_obj, sample_name, plot_path("_09_qc_final"),
-                   paste0("QC (Final) — ", sample_name))
+                   paste0("QC (Final) - ", sample_name))
 
-    # -- Save --
     seur_obj@misc$processed_with_sct <- isTRUE(use_sct)
+    seur_obj@misc$pipeline_seed      <- seed
     saveRDS(seur_obj, output_rds)
     message("Saved: ", output_rds, "\n===== Done: ", sample_name, " =====\n")
     output_rds
@@ -412,18 +405,16 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
 # STEP 3 — INTEGRATE SAMPLES
 # ==============================================================================
 
-integrate_samples <- function(sample_list, chosen_res = 0.4) {
+integrate_samples <- function(sample_list, chosen_res) {
   sample_list <- Filter(Negate(is.null), sample_list)
   if (length(sample_list) == 0) stop("No valid samples for integration.")
 
-  # Load file paths into objects
   sample_objs <- lapply(sample_list, function(x) {
     if (is.character(x) && file.exists(x)) readRDS(x) else x
   })
 
-  # De-duplicate barcodes by prefixing with sample tag
   if (any(duplicated(unlist(lapply(sample_objs, colnames))))) {
-    message("Duplicated barcodes detected — prefixing with sample tags")
+    message("Duplicated barcodes detected - prefixing with sample tags")
     sample_objs <- lapply(seq_along(sample_objs), function(i) {
       obj <- sample_objs[[i]]
       tag <- NA
@@ -441,7 +432,6 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     })
   }
 
-  # Verify consistent SCT usage across samples
   used_sct <- sapply(sample_objs, function(obj) {
     flag <- try(obj@misc$processed_with_sct, silent = TRUE)
     if (!is.null(flag) && !inherits(flag, "try-error")) as.logical(flag)
@@ -452,20 +442,18 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
 
   inferred_sct <- isTRUE(unique(used_sct))
   if (inferred_sct != isTRUE(opt$use_sct)) {
-    message("Overriding opt$use_sct → ", inferred_sct, " to match processed samples")
+    message("Overriding opt$use_sct -> ", inferred_sct, " to match processed samples")
     opt$use_sct <<- inferred_sct
   }
 
   message("\n===== Starting Harmony Integration =====")
 
-  # Strip per-sample SCT assays — global SCTransform will be re-run on the merge
   sample_objs <- lapply(sample_objs, function(obj) {
     DefaultAssay(obj) <- "RNA"
     if ("SCT" %in% names(obj)) obj[["SCT"]] <- NULL
     obj
   })
 
-  # Merge
   TN.combined <- if (length(sample_objs) > 1)
     merge(sample_objs[[1]], y = sample_objs[-1])
   else
@@ -475,7 +463,6 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     stop("Merged result is not a Seurat object. Check your input samples.")
   TN.combined <- try_join_layers(TN.combined)
 
-  # Cell cycle scoring on the RNA assay before global normalisation
   message("Cell cycle scoring on merged object...")
   DefaultAssay(TN.combined) <- "RNA"
   tryCatch(TN.combined <- NormalizeData(TN.combined, verbose = FALSE),
@@ -497,7 +484,6 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     message("Skipping CellCycleScoring: cc.genes unavailable")
   }
 
-  # Batch column for Harmony
   if (!(opt$batch_var %in% colnames(TN.combined@meta.data))) {
     fb <- if ("orig.ident2" %in% colnames(TN.combined@meta.data)) "orig.ident2" else "orig.ident1"
     message("batch_var '", opt$batch_var, "' not found; using '", fb, "'")
@@ -506,7 +492,6 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     TN.combined$batch <- TN.combined[[opt$batch_var]]
   }
 
-  # Global normalisation + PCA
   if (isTRUE(opt$use_sct)) {
     vars_reg <- if (all(c("S.Score", "G2M.Score") %in% colnames(TN.combined@meta.data)))
       c("percent.mt", "S.Score", "G2M.Score") else "percent.mt"
@@ -521,38 +506,39 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
     TN.combined <- NormalizeData(TN.combined, verbose = FALSE) %>%
       FindVariableFeatures(nfeatures = 2000, verbose = FALSE) %>%
       ScaleData(vars.to.regress = "percent.mt", features = rownames(TN.combined), verbose = FALSE) %>%
-      RunPCA(npcs = opt$pcs_global, verbose = FALSE)
+      RunPCA(npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
     harmony_assay <- "RNA"
   }
 
-  save_plot(ElbowPlot(TN.combined, ndims = 50),
+  save_plot(ElbowPlot(TN.combined, ndims = opt$pcs_global),
                  file.path(output_dirs$plots, "TNcombined_elbow"))
 
-  # Harmony → UMAP → clustering
-  # Harmony → UMAP → clustering
   message("Running Harmony (assay: ", harmony_assay, ")...")
   TN.combined <- RunHarmony(TN.combined, group.by.vars = "batch",
                             assay.use = harmony_assay, verbose = FALSE)
-  
+
   TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, seed.use = opt$seed,
                          umap.method = "uwot", metric = "cosine", verbose = FALSE)
-                         
+
   TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, verbose = FALSE)
 
-  resolutions <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8)
+  # Resolutions to sweep for clustree come from config; chosen_res (the
+  # single "active" resolution) must always be included in the sweep.
+  resolutions <- unique(sort(c(
+    cfg_get(cfg, "subsetting", "resolutions", default = c(0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8)),
+    chosen_res
+  )))
   message("Clustering at resolutions: ", paste(resolutions, collapse = ", "))
   TN.combined <- FindClusters(TN.combined, resolution = resolutions, random.seed = opt$seed, verbose = FALSE)
-  
+
   cluster_prefix <- paste0(harmony_assay, "_snn_res.")
 
-  # Clustree
   p_tree <- clustree(TN.combined, prefix = cluster_prefix,
                      node_text_size = 3, edge_arrow = FALSE) +
     ggtitle("Clustree Resolution Tracker") +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
   save_plot(p_tree, file.path(output_dirs$plots, "TNcombined_clustree"), w = 15, h = 10)
 
-  # Set default resolution
   default_col <- paste0(cluster_prefix, chosen_res)
   if (default_col %in% colnames(TN.combined@meta.data)) {
     Idents(TN.combined) <- default_col
@@ -564,36 +550,34 @@ integrate_samples <- function(sample_list, chosen_res = 0.4) {
   write.csv(table(Idents(TN.combined), TN.combined$orig.ident1),
             file.path(output_dirs$tables, "CellNumber_bygroup.csv"))
 
-  # --- 1. Save the Full Object First ---
-  full_rds_path <- file.path(output_base, "TN.combined_dim30_full.rds")
-  message("Saving full integrated object to: ", full_rds_path)
-  saveRDS(TN.combined, full_rds_path)
+  TN.combined@misc$pipeline_seed <- opt$seed
+  TN.combined@misc$pipeline_config_path <- opt$config
 
-  # --- 2. Create and Save the Diet Object for Downstream Analysis ---
+  message("Saving full integrated object to: ", integrated_full_rds)
+  saveRDS(TN.combined, integrated_full_rds)
+
   message("Trimming a lightweight copy with DietSeurat...")
   TN.diet <- DietSeurat(
     TN.combined,
-    counts = TRUE,       # Keep raw counts (required for DGE / pseudobulk)
-    data = TRUE,         # Keep normalized data (required for CellChat / SingleR)
-    scale.data = FALSE,  # Drop heavy scaled matrices to save RAM and disk space
+    counts = TRUE,
+    data = TRUE,
+    scale.data = FALSE,
     assays = c("RNA", "SCT"),
     dimreducs = c("pca", "harmony", "umap")
   )
 
   message("Saving diet integrated object to: ", integrated_rds)
-  saveRDS(TN.diet, integrated_rds) # integrated_rds points to "TN.combined_dim30.rds"
-  
+  saveRDS(TN.diet, integrated_rds)
+
   message("===== Harmony integration and dual-saving complete =====\n")
-  TN.combined # Return the full object to memory so subsequent steps inside the R session don't lose anything
+  TN.combined
 }
 
 # ==============================================================================
 # STEP 4 — GENERATE PLOTS
-# Uses numeric cluster labels only.  Run cell_annotation.R afterwards to
-# produce annotated UMAP plots with cell-type labels.
 # ==============================================================================
 
-generate_plots <- function(chosen_res = 0.4) {
+generate_plots <- function(chosen_res) {
   if (!file.exists(integrated_rds))
     stop("Integrated object not found. Run the 'integrate' step first.")
 
@@ -602,43 +586,33 @@ generate_plots <- function(chosen_res = 0.4) {
 
   message("\n===== Generating Plots =====")
 
-  # Resolve clustering column
-  md_cols        <- colnames(TN.combined@meta.data)
-  cluster_prefix <- if      (any(startsWith(md_cols, "SCT_snn_res."))) "SCT_snn_res."
-                    else if (any(startsWith(md_cols, "RNA_snn_res."))) "RNA_snn_res."
-                    else {
-                      fb <- if (isTRUE(opt$use_sct)) "SCT_snn_res." else "RNA_snn_res."
-                      message("Warning: no clustering columns found; falling back to ", fb)
-                      fb
-                    }
-
-  res_col <- paste0(cluster_prefix, chosen_res)
-  if (!res_col %in% md_cols)
-    stop("Resolution ", chosen_res, " not found (prefix: ", cluster_prefix, ")")
+  res_col <- resolve_res_col(TN.combined, chosen_res)
+  if (is.null(res_col)) {
+    fb <- if (isTRUE(opt$use_sct)) "SCT_snn_res." else "RNA_snn_res."
+    stop("Resolution ", chosen_res, " not found (expected prefix: ", fb, ")")
+  }
 
   Idents(TN.combined) <- res_col
-  message("Using numeric cluster labels (run cell_annotation.R for cell-type labels)")
+  message("Using numeric cluster labels (run 02_global_annotation.R for cell-type labels)")
 
   plot_colors <- pick_colors(length(levels(TN.combined)))
   res_title   <- paste0("Global Integration (res: ", chosen_res, ")")
   umap_theme  <- theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 
-  # Prepare RNA assay for DE / visualisation
   DefaultAssay(TN.combined) <- "RNA"
   TN.combined <- try_join_layers(TN.combined)
   TN.combined <- NormalizeData(TN.combined, assay = "RNA", verbose = FALSE)
 
-  # ---- UMAP plots ----
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = FALSE,
             pt.size = 0.8, cols = plot_colors) +
-      ggtitle(paste(res_title, "— Unlabeled")) + umap_theme,
+      ggtitle(paste(res_title, "- Unlabeled")) + umap_theme,
     file.path(output_dirs$plots, "TNcombined_umap_labelF")
   )
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = TRUE, label.size = 3,
             repel = TRUE, pt.size = 0.8, cols = plot_colors) +
-      ggtitle(paste(res_title, "— Labeled")) + umap_theme,
+      ggtitle(paste(res_title, "- Labeled")) + umap_theme,
     file.path(output_dirs$plots, "TNcombined_umap_labelT")
   )
   save_plot(
@@ -649,17 +623,16 @@ generate_plots <- function(chosen_res = 0.4) {
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = TRUE, label.size = 3, repel = TRUE,
             split.by = "orig.ident1", pt.size = 0.8, ncol = 2, cols = plot_colors) +
-      ggtitle(paste(res_title, "— Split by Condition")) + umap_theme,
+      ggtitle(paste(res_title, "- Split by Condition")) + umap_theme,
     file.path(output_dirs$plots, "TNcombined_umap_split_condition")
   )
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = TRUE, label.size = 3, repel = TRUE,
             split.by = "orig.ident2", pt.size = 0.8, ncol = 2, cols = plot_colors) +
-      ggtitle(paste(res_title, "— Split by Sample")) + umap_theme,
+      ggtitle(paste(res_title, "- Split by Sample")) + umap_theme,
     file.path(output_dirs$plots, "TNcombined_umap_split_sample")
   )
 
-  # ---- Marker detection + heatmap ----
   message("Finding markers...")
   markers <- tryCatch(
     suppressWarnings(FindAllMarkers(TN.combined, assay = "RNA", only.pos = TRUE,
@@ -692,7 +665,6 @@ generate_plots <- function(chosen_res = 0.4) {
     message("No DE markers found; skipping heatmap")
   }
 
-  # ---- Stacked bar proportion plots ----
   make_stacked_bar <- function(counts_table, x_label, save_name, w = 10, h = 8) {
     df <- as.data.frame(prop.table(counts_table, margin = 2)) %>%
       setNames(c("Cluster", x_label, "Proportion")) %>%
@@ -718,7 +690,6 @@ generate_plots <- function(chosen_res = 0.4) {
   make_stacked_bar(table(Idents(TN.combined), TN.combined$orig.ident2),
                    "Sample", "proportion_by_sample", w = 12)
 
-  # ---- Faceted proportion boxplots (fixed + free, condition + sample) ----
   message("Generating faceted proportion plots...")
   prop_data <- as.data.frame(
     table(Idents(TN.combined), TN.combined$orig.ident2, TN.combined$orig.ident1)
@@ -764,7 +735,6 @@ generate_plots <- function(chosen_res = 0.4) {
                    w = 16, h = 12)
   }
 
-  # ---- Pseudo-bulk PCA ----
   message("Generating pseudo-bulk PCA...")
   avg_expr <- AggregateExpression(TN.combined, group.by = "orig.ident2", assays = "RNA",
                                   normalization.method = "LogNormalize",
@@ -788,7 +758,6 @@ generate_plots <- function(chosen_res = 0.4) {
     theme(plot.title = element_text(hjust = 0.5, size = 16))
   save_plot(p_pca, file.path(output_dirs$plots, "pca_sample_similarity"), w = 10, h = 8)
 
-  # ---- Summary DotPlot ----
   markers_file <- file.path(output_dirs$tables, "Findallmarkers.csv")
   dot_markers  <- NULL
   if (file.exists(markers_file))
@@ -824,16 +793,8 @@ generate_plots <- function(chosen_res = 0.4) {
 execute_step <- function(step) {
   switch(step,
 
-    # ---- read_csv ----
-    read_csv = {
-      read_samples_csv(opt$file)
-    },
+    read_csv = { read_samples_csv(opt$file) },
 
-    # ---- process ----
-    # Samples are processed in PARALLEL using parallel::mclapply.
-    # Each call to process_sample is fully self-contained and writes its own
-    # RDS file, so workers never share state.  On Windows mclapply falls back
-    # to lapply (no forking), which is still correct.
     process = {
       samples_df <- readRDS(file.path(output_base, "samples_df.rds"))
 
@@ -866,7 +827,8 @@ execute_step <- function(step) {
             base_data_dir = opt$datadir,
             out_dirs      = output_dirs,
             use_sct       = use_sct,
-            params        = params
+            params        = params,
+            seed          = opt$seed
           )
         },
         mc.cores       = n_cores,
@@ -876,14 +838,13 @@ execute_step <- function(step) {
 
       failed <- which(sapply(results, is.null))
       if (length(failed) > 0)
-        message("WARNING: failed samples — ",
+        message("WARNING: failed samples - ",
                 paste(samples_df$sample_names[failed], collapse = ", "))
       else
         message("All samples processed successfully")
       invisible(results)
     },
 
-    # ---- integrate ----
     integrate = {
       if (file.exists(integrated_rds)) {
         message("Loading existing integrated object: ", integrated_rds)
@@ -897,7 +858,6 @@ execute_step <- function(step) {
       integrate_samples(lapply(sample_files, readRDS), chosen_res = opt$resolution)
     },
 
-    # ---- plot ----
     plot = {
       output_dirs$plots  <<- file.path(output_base, "plots",  res_folder)
       output_dirs$tables <<- file.path(output_base, "tables", res_folder)
@@ -906,7 +866,6 @@ execute_step <- function(step) {
       generate_plots(chosen_res = opt$resolution)
     },
 
-    # ---- all ----
     all = {
       execute_step("read_csv")
       execute_step("process")
@@ -922,12 +881,9 @@ execute_step <- function(step) {
 # MAIN
 # ==============================================================================
 
-if (is.null(opt$file)) stop("Specify input file with -f")
+if (is.null(opt$file)) stop("Specify input file with -f, or set input_csv in config.yaml")
 if (is.null(opt$step)) stop("Specify pipeline step with -s")
 
 execute_step(opt$step)
 message("Step '", opt$step, "' completed at ", Sys.time())
 
-sink(type = "message")
-sink(type = "output")
-close(log_conn)

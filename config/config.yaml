@@ -21,7 +21,8 @@ reproducibility:
 # 2. Pipeline Parameters: Global Preprocessing (01_preprocessing.R)
 # ------------------------------------------------------------------------------
 preprocessing:
-  resolution: 0.2
+  threads: 8
+  resolution: 0.1
   doublet_rate: 0.08
   min_features: 200
   max_features: 5000
@@ -41,15 +42,9 @@ subsetting:
     - "Mast"
     - "keratinocyte"
   pcs: 20             # Extracted from hardcoded pcs_to_use
-  resolutions: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
-  # Uncertain-call thresholds for 04_detail_annotation.R (blended margin: the
-  # cluster is called Uncertain unless the gap between the top-scoring and
-  # second-best module score clears max(uncertain_abs_margin,
-  # uncertain_margin * top_score)). Explicitly set here instead of relying on
-  # the Snakefile default, since the relative margin alone is unreachable
-  # once AddModuleScore output sits near/below zero.
-  uncertain_margin: 0.10       # relative floor, applied when top score is large
-  uncertain_abs_margin: 0.002  # absolute floor, applied when top score is small/near zero
+  resolutions: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2]
+  uncertain_margin: 0.05       # relative floor, applied when top score is large
+  uncertain_abs_margin: 0.0
 
     
 # ------------------------------------------------------------------------------

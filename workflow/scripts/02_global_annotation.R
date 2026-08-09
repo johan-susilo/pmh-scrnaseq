@@ -1,19 +1,25 @@
 #!/usr/bin/env Rscript
 # Usage:
-#   Rscript cell_annotation.R -i TN.combined_dim30.rds -s all -o /output/annotations -r 0.3
+#   Rscript 02_global_annotation.R -i results/01_preprocessing/TN.combined_dim30.rds -o results/02_annotation -s all -r 0.2
 #
 # Steps:
-#   read_rds        – load TN.combined_dim30.rds and cache seurat_objects.rds
-#   singleR         – SingleR annotation (HPCA + BlueprintEncode)
-#   markers         – classical marker DotPlots
-#   celliD          – CelliD / PanglaoDB annotation
-#   scCATCH         – scCATCH annotation
-#   consensus       – voting consensus from all methods → consensus_annotation.tsv
-#   apply_labels    – apply consensus to dim30 RDS (updates it in-place) and write
-#                     TN.combined_annotated.rds + annotated UMAP plots
-#   combined_plots  – cluster-number UMAP / proportion plots (no annotation needed)
-#   all             – read_rds → singleR → markers → celliD → scCATCH →
-#                     consensus → apply_labels → combined_plots
+#   read_rds        - load TN.combined_dim30.rds and cache seurat_objects.rds
+#   singleR         - SingleR annotation (HPCA + BlueprintEncode)
+#   markers         - classical marker DotPlots
+#   celliD          - CelliD / PanglaoDB annotation
+#   scCATCH         - scCATCH annotation
+#   consensus       - voting consensus from all methods -> consensus_annotation.tsv
+#   apply_labels    - apply consensus to the object, write TN.combined_annotated.rds with
+#                     cluster_label / cell_type_short / cell_type_full columns
+#   combined_plots  - cluster-number UMAP / proportion plots (no annotation needed)
+#   all             - read_rds -> singleR -> markers -> celliD -> scCATCH ->
+#                     consensus -> apply_labels -> combined_plots
+#
+# CONTRACT WITH 03: this script must always produce
+#   <output>/res_<r>/TN.combined_annotated.rds  (<output> = whatever -o this rule is given, used as-is)
+# with a `cell_type_full` metadata column whose values are EXACT strings
+# (e.g. "Fibroblasts", "Macrophages", "Ambiguous", "Low-confidence: Mast cells")
+# that 03_subset_clusters.R matches against exactly first, substring second.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -39,57 +45,58 @@ source("workflow/scripts/00_utils.R")
 
 option_list <- list(
   make_option(c("-i", "--rds"),        type = "character", default = NULL,
-              help = "Path to TN.combined_dim30.rds"),
+              help = "Path to TN.combined_dim30.rds (output of 01_preprocessing.R -s integrate)"),
   make_option(c("-s", "--step"),       type = "character", default = "all",
               help = "Pipeline step: read_rds, singleR, markers, celliD, scCATCH, consensus, apply_labels, combined_plots, all"),
-  make_option(c("-o", "--output"),     type = "character", default = "annotations",
-              help = "Base output directory [default: annotations]"),
+  make_option(c("-o", "--output"),     type = "character", default = "results",
+              help = "Base output directory (same base passed to 01_preprocessing.R)"),
+  make_option(c("--config"),           type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
   make_option(c("-p", "--plots"),      type = "character", default = NULL,
-              help = "Preprocessing plots directory (source for UMAP copies)"),
-  make_option(c("--tissue"),           type = "character", default = "skin",
+              help = "01_preprocessing.R plots directory (source for UMAP copies)"),
+  make_option(c("--tissue"),           type = "character", default = NULL,
               help = "Tissue type for scCATCH [default: skin]"),
-  make_option(c("-r", "--resolution"), type = "character", default = "0.2",
-              help = "Clustering resolution [default: 0.2]"),
-  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
+  make_option(c("-r", "--resolution"), type = "character", default = NULL,
+              help = "Clustering resolution [config: preprocessing.resolution]"),
+  make_option(c("--seed"), type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
 )
 
-opt    <- parse_args(OptionParser(option_list = option_list))
+opt <- parse_args(OptionParser(option_list = option_list))
+cfg <- get_config(opt$config)
 
-# Append resolution sub-folder to output base
+`%||%` <- function(a, b) if (is.null(a)) b else a
+opt$resolution <- opt$resolution %||% as.character(cfg_get(cfg, "preprocessing", "resolution", default = 0.2))
+opt$tissue     <- opt$tissue     %||% "skin"
+opt$seed       <- opt$seed       %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
+# No guessed default for -i/--rds or -p/--plots: each Snakemake rule passes
+# its own -o, so there's no reliable shared "base" directory to derive 01's
+# output path from here. Pass -i explicitly (the Snakefile's `input:` block
+# should point at 01's TN.combined_dim30.rds -- see 01_preprocessing.R).
+
+set.seed(opt$seed)
+
+# `-o` is used as-is + a res_<r> subfolder -- no extra stage-name folder is
+# inserted, since the Snakemake rule already points `-o` at a stage-specific
+# directory (e.g. .../02_annotation). See 01_preprocessing.R's OUTPUT
+# DIRECTORIES comment for why this matters (this exact nesting mistake
+# previously caused a MissingOutputException).
 res_folder  <- paste0("res_", opt$resolution)
 output_base <- file.path(opt$output, res_folder)
-
 dir.create(output_base, recursive = TRUE, showWarnings = FALSE)
 
-output_dirs <- list(
-  singleR        = file.path(output_base, "singleR"),
-  markers        = file.path(output_base, "markers"),
-  celliD         = file.path(output_base, "celliD"),
-  scCATCH        = file.path(output_base, "scCATCH"),
-  consensus      = file.path(output_base, "consensus"),
-  annotation_plots = file.path(output_base, "annotation_plots"),
-  combined_plots = file.path(output_base, "combined_plots"),
-  logs           = file.path(output_base, "logs")
-)
-lapply(output_dirs, dir.create, recursive = TRUE, showWarnings = FALSE)
+output_dirs <- make_stage_dirs(output_base, c(
+  "01_reference_mapping/singleR", 
+  "01_reference_mapping/celliD", 
+  "01_reference_mapping/scCATCH",
+  "02_classical_markers", 
+  "03_consensus",
+  "04_plots/annotation_plots", 
+  "04_plots/combined_plots", 
+  "logs"
+))
+# This maps your new neat folders back to the original variables the script expects
+names(output_dirs) <- c("singleR", "celliD", "scCATCH", "markers", "consensus", "annotation_plots", "combined_plots", "logs")
 
-# ==============================================================================
-# LOGGING
-# ==============================================================================
-
-log_file <- file.path(output_dirs$logs,
-                      paste0("annotation_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log"))
-log_conn <- file(log_file, open = "wt")
-sink(log_conn, type = "output", split = TRUE)
-sink(log_conn, type = "message")
-message("Log: ", log_file, " | Started: ", Sys.time())
-
-# Always sequential to avoid deadlocks with Seurat
-plan(sequential)
-
-# ==============================================================================
-# SHARED FILE PATHS
-# ==============================================================================
+plan(sequential)  # always sequential to avoid deadlocks with Seurat
 
 annotated_rds <- file.path(output_base, "TN.combined_annotated.rds")
 
@@ -97,10 +104,6 @@ annotated_rds <- file.path(output_base, "TN.combined_annotated.rds")
 # HELPER UTILITIES
 # ==============================================================================
 
-# Normalise cell-type names to a canonical vocabulary.
-# Handles plural/singular variants and known aliases (e.g. "M2 Macrophage" -> "Macrophages")
-# so that near-duplicate votes get merged before consensus tallying, instead of
-# being counted as separate competing cell types.
 normalize_cell_type <- function(cell_type) {
   cell_type <- trimws(gsub("_", " ", cell_type))
   key <- tolower(cell_type)
@@ -133,19 +136,33 @@ normalize_cell_type <- function(cell_type) {
 }
 
 tie_break_markers <- list(
-  "Mast cells"      = c("TPSAB1", "TPSB2", "CPA3", "MS4A2"),
-  "T cells"         = c("CD3D", "CD3E", "CD3G", "TRBC2"),
-  "NK cells"        = c("NKG7", "GNLY", "KLRD1"),
-  "B cells"         = c("MS4A1", "CD79A", "CD79B"),
-  "Macrophages"     = c("CD68", "CD163", "MRC1"),
-  "Monocytes"       = c("FCN1", "S100A8", "S100A9"),
-  "Dendritic cells" = c("CD1C", "CLEC9A", "LAMP3"),
-  "CMP"             = c("MPO", "ELANE", "PRTN3"),   # true bone-marrow progenitor markers, KIT excluded on purpose
-  "HSC"             = c("AVP", "CRHBP", "MLLT3")
+  "Mast cells" = c("TPSAB1", "TPSB2", "CPA3"),
+  "T cells" = c("CD3G", "TRBC2", "TRAC"),
+  "CD4 T cells" = c("IL7R", "LTB", "CCR7", "MAL"),
+  "CD8 T cells" = c("CD8A", "CD8B", "GZMK"),
+  "NK cells" = c("NKG7", "GNLY", "KLRD1"),
+  "B cells" = c("MS4A1", "CD79A", "CD79B", "CD37"),
+  "Plasma cells" = c("JCHAIN", "MZB1", "SDC1", "XBP1", "IGKC", "IGHG1"),
+  "Macrophages" = c("CD68", "CD163", "MRC1", "C1QA", "C1QB"),
+  "Monocytes" = c("FCN1", "LYZ", "CD14"),
+  "Non-classical monocytes" = c("FCGR3A", "MS4A7", "LGALS3", "IFITM3"),
+  "Dendritic cells" = c("CD1C", "CLEC10A", "CLEC9A", "XCR1"),
+  "pDCs" = c("LILRA4", "CLEC4C", "IRF7", "TCF4", "SERPINF1"),
+  "Neutrophils" = c("FCGR3B", "CSF3R", "FPR1", "CXCR2"),
+  "Eosinophils" = c("CLC", "CCR3", "IL5RA", "EPX", "PRG2"),
+  "Basophils" = c("FCER1A", "HDC", "IL3RA"),
+  "Megakaryocytes" = c("PPBP", "PF4", "NRGN", "GNG11"),
+  "Erythroid cells" = c("HBB", "HBA1", "HBA2", "ALAS2", "GYPA"),
+  "CMP" = c("KIT", "MPO", "GATA2", "ELANE"),
+  "HSC" = c("MPL", "PROM1", "HLF", "MLLT3"),
+  "Fibroblasts" = c("COL1A1", "COL1A2", "DCN", "LUM", "COL3A1", "PDGFRA"),
+  "Pericytes" = c("RGS5", "NOTCH3", "PDGFRB", "ACTA2"),
+  "Mesenchymal Stem Cell" = c("ENG", "THY1", "NT5E", "CD44"),
+  "Keratinocytes" = c("KRT5", "KRT14", "KRT1", "KRT10"),
+  "Epithelial cells" = c("EPCAM", "KRT18", "KRT19", "CDH1"),
+  "Enterocytes" = c("VIL1", "CDX2", "KRT20", "FABP2")
 )
 
-# Broader lineage grouping, used only to resolve near-miss ties that survive
-# synonym normalization (e.g. "Monocytes" vs "Macrophages" both being myeloid).
 lineage_group_map <- c(
   "Monocytes"           = "Myeloid cells",
   "Macrophages"         = "Myeloid cells",
@@ -167,7 +184,7 @@ resolve_tie_with_markers <- function(seurat_obj, cluster_id, res_col, candidates
                                       marker_panel = tie_break_markers,
                                       min_score = 0.1, min_gap = 0.15) {
   candidates <- intersect(candidates, names(marker_panel))
-  if (length(candidates) < 2) return(NULL)  # nothing to arbitrate with
+  if (length(candidates) < 2) return(NULL)
 
   cells <- WhichCells(seurat_obj, idents = cluster_id)
   if (length(cells) == 0) return(NULL)
@@ -182,18 +199,16 @@ resolve_tie_with_markers <- function(seurat_obj, cluster_id, res_col, candidates
   scores <- sort(scores[!is.na(scores)], decreasing = TRUE)
   if (length(scores) < 2) return(NULL)
 
-  # require the winner to actually be expressed, and to clearly beat the runner-up
   if (scores[1] >= min_score && (scores[1] - scores[2]) >= min_gap) {
     return(names(scores)[1])
   }
-  NULL  # stays Ambiguous — genuinely inconclusive
+  NULL
 }
 
 get_lineage <- function(cell_type) {
   if (cell_type %in% names(lineage_group_map)) lineage_group_map[[cell_type]] else cell_type
 }
 
-# Parse "CellType (Count, Percent%); CellType (Count, Percent%); ..." into a data.frame
 parse_vote_details <- function(vote_details) {
   entries <- trimws(unlist(strsplit(vote_details, ";")))
   entries <- entries[entries != ""]
@@ -209,12 +224,6 @@ parse_vote_details <- function(vote_details) {
   do.call(rbind, rows)
 }
 
-# Re-tally votes from Vote_Details after synonym normalization (so "Mast cell" and
-# "Mast cells" count as one vote, etc.), then classify each cluster as:
-#   - a confident single cell type (>= min_percent of the re-tallied votes)
-#   - "<Lineage> (mixed)" if the still-tied winners share a broader lineage
-#   - "Low-confidence: <CellType>" if there's a single winner but below min_percent
-#   - "Ambiguous" if the tied winners have nothing in common
 resolve_confident_label <- function(vote_details, min_percent = 50) {
   votes <- parse_vote_details(vote_details)
   if (is.null(votes) || nrow(votes) == 0) return("Unknown")
@@ -233,14 +242,12 @@ resolve_confident_label <- function(vote_details, min_percent = 50) {
     return(paste0("Low-confidence: ", winners[1]))
   }
 
-  # Still tied after synonym merging - check if they at least share a lineage
   lineages <- unique(sapply(winners, get_lineage))
   if (length(lineages) == 1) return(paste0(lineages[1], " (mixed)"))
 
   "Ambiguous"
 }
 
-# Apply resolve_confident_label() across every row of the consensus table
 get_confident_labels <- function(consensus_data, min_percent = 50) {
   consensus_data$Confident_Cell_Type <- sapply(
     consensus_data$Vote_Details, resolve_confident_label, min_percent = min_percent
@@ -248,21 +255,14 @@ get_confident_labels <- function(consensus_data, min_percent = 50) {
   consensus_data
 }
 
-# Resolve resolution column from a Seurat object's metadata
-resolve_res_col <- function(obj, resolution) {
-  md_cols <- colnames(obj@meta.data)
-  res_col_sct <- paste0("SCT_snn_res.", resolution)
-  res_col_rna <- paste0("RNA_snn_res.", resolution)
-  if      (res_col_sct %in% md_cols) res_col_sct
-  else if (res_col_rna %in% md_cols) res_col_rna
-  else NULL
-}
+# NOTE: resolve_res_col() now lives in 00_utils.R (shared with 01 and 03)
+# rather than being redefined here.
 
 # ==============================================================================
-# OBJECT LOADING — ensure seurat_objects is populated
+# OBJECT LOADING
 # ==============================================================================
 
-seurat_objects <- NULL   # global cache for the session
+seurat_objects <- NULL
 
 load_seurat_objects <- function() {
   cache_path <- file.path(output_base, "seurat_objects.rds")
@@ -275,7 +275,7 @@ load_seurat_objects <- function() {
   }
 
   if (is.null(opt$rds)) stop("--rds path must be specified")
-  seurat_objects <<- read_rds(opt$rds)
+  seurat_objects <<- read_rds_step(opt$rds)
   saveRDS(seurat_objects, cache_path)
 }
 
@@ -283,10 +283,13 @@ load_seurat_objects <- function() {
 # STEP: READ RDS
 # ==============================================================================
 
-read_rds <- function(rds_path) {
+read_rds_step <- function(rds_path) {
   message("============================================================")
   message("Reading RDS: ", rds_path)
   message("============================================================")
+  if (!file.exists(rds_path))
+    stop("Integrated object not found at '", rds_path,
+         "'. Run 01_preprocessing.R's 'integrate' step first.")
 
   TN.combined <- readRDS(rds_path)
 
@@ -295,11 +298,13 @@ read_rds <- function(rds_path) {
     Idents(TN.combined) <- res_col
     message("Active identity set to: ", res_col)
   } else {
-    message("WARNING: resolution column for ", opt$resolution, " not found; using default clusters.")
+    stop("Resolution column for ", opt$resolution, " not found in '", rds_path,
+         "'. Available snn_res columns: ",
+         paste(grep("snn_res", colnames(TN.combined@meta.data), value = TRUE), collapse = ", "))
   }
 
   DefaultAssay(TN.combined) <- "RNA"
-  Joined_TN.combined <- JoinLayers(TN.combined)
+  Joined_TN.combined <- try_join_layers(TN.combined)
 
   message("Cells: ", ncol(Joined_TN.combined),
           " | Features: ", nrow(Joined_TN.combined),
@@ -352,7 +357,6 @@ run_singleR <- function(Joined_TN.combined) {
   write.csv(clustering.table_bpe,
             file.path(output_dirs$singleR, "SingleR_bpe.csv"), row.names = TRUE)
 
-  # Summarise: add annotation row (best cell type per cluster)
   summarise_singleR <- function(csv_path, tsv_path) {
     t <- read.csv(csv_path)
     rownames(t) <- t[, 1]; t <- t[, -1]
@@ -406,7 +410,7 @@ plot_markers <- function(Joined_TN.combined) {
   results <- lapply(names(marker_sets), function(cell_type) {
     markers_filtered <- intersect(marker_sets[[cell_type]], available_features)
     if (length(markers_filtered) == 0) {
-      message("Warning: no markers available for ", cell_type, " — skipping")
+      message("Warning: no markers available for ", cell_type, " - skipping")
       return(NULL)
     }
     p <- DotPlot(Joined_TN.combined, features = markers_filtered,
@@ -415,7 +419,7 @@ plot_markers <- function(Joined_TN.combined) {
       labs(title = gsub("_", " ", cell_type)) +
       theme(plot.title = element_text(hjust = 0.5, size = 24))
     save_plot(p, file.path(output_dirs$markers,
-                               paste0("Classical_markers_", cell_type, ".pdf")))
+                               paste0("Classical_markers_", cell_type)))
     cell_type
   })
 
@@ -440,7 +444,6 @@ run_celliD <- function(seurat_object) {
     return(invisible(NULL))
   }
 
-  # Downsample if very large
   if (ncol(seurat_object) > 90000) {
     message("Downsampling to 90,000 cells for CelliD...")
     seurat_object <- subset(seurat_object,
@@ -448,15 +451,26 @@ run_celliD <- function(seurat_object) {
   }
 
   message("Joining layers on downsampled object...")
-  seurat_joined <- JoinLayers(seurat_object)
+  seurat_joined <- try_join_layers(seurat_object)
 
   message("Running MCA...")
   DefaultAssay(seurat_joined) <- "RNA"
   Baron <- RunMCA(seurat_joined, features = rownames(seurat_joined))
 
   message("Downloading PanglaoDB signatures...")
-  panglao <- read_tsv("https://panglaodb.se/markers/PanglaoDB_markers_27_Mar_2020.tsv.gz",
-                      show_col_types = FALSE)
+  panglao <- tryCatch({
+    read_tsv("https://panglaodb.se/markers/PanglaoDB_markers_27_Mar_2020.tsv.gz",
+             show_col_types = FALSE)
+  }, error = function(e) {
+    message("   -> WARNING: PanglaoDB server timeout or download failed. Skipping CelliD annotation.")
+    return(NULL)
+  })
+
+  # If the download failed, gracefully exit this function without crashing the script
+  if (is.null(panglao)) {
+    return(invisible(NULL))
+  }
+  
   all_gs <- panglao %>%
     filter(str_detect(species, "Hs")) %>%
     group_by(`cell type`) %>%
@@ -474,7 +488,7 @@ run_celliD <- function(seurat_object) {
     DimPlot(Baron, group.by = "all_gs_prediction_signif", reduction = "umap",
             label = TRUE, label.size = 3, repel = TRUE) +
       theme(legend.text = element_text(size = 7), aspect.ratio = 1),
-    file.path(output_dirs$celliD, "Baron_dimplot.pdf")
+    file.path(output_dirs$celliD, "Baron_dimplot")
   )
 
   message("Summarising CelliD results...")
@@ -482,7 +496,6 @@ run_celliD <- function(seurat_object) {
   write.csv(clustering.table_CelliD,
             file.path(output_dirs$celliD, "CelliD_PanglaoDB.csv"))
 
-  # Exclude "unassigned" when picking the best label per cluster
   table_for_summary <- clustering.table_CelliD
   if ("unassigned" %in% rownames(table_for_summary))
     table_for_summary <- table_for_summary[rownames(table_for_summary) != "unassigned", , drop = FALSE]
@@ -542,7 +555,6 @@ run_scCATCH <- function(TN.combined, Joined_TN.combined) {
 
   write.csv(obj@celltype, file.path(output_dirs$scCATCH, "scCATCH.csv"), row.names = FALSE)
 
-  # Reshape to wide summary for consensus voting
   message("Processing scCATCH results for consensus...")
   data <- read.csv(file.path(output_dirs$scCATCH, "scCATCH.csv"),
                    header = TRUE, stringsAsFactors = FALSE)
@@ -582,7 +594,7 @@ generate_consensus_annotation <- function() {
 
   add_vote <- function(cluster_id, cell_type_raw, source_name) {
     if (is.null(cell_type_raw) || is.na(cell_type_raw) || cell_type_raw == "") return(NULL)
-    clean_cluster <- trimws(as.character(gsub("^X+", "", as.character(cluster_id))))
+    clean_cluster <- strip_cluster_prefix(cluster_id)
     types <- trimws(unlist(strsplit(as.character(cell_type_raw), ",")))
     types <- types[types != ""]
     types <- sapply(types, normalize_cell_type, USE.NAMES = FALSE)
@@ -614,7 +626,6 @@ generate_consensus_annotation <- function() {
     )
   }
 
-  # Process SingleR / CelliD matrix files (annotation as a row or column)
   process_matrix_file <- function(path, tool_name) {
     df <- safe_read_table(path)
     if (is.null(df)) return()
@@ -633,7 +644,6 @@ generate_consensus_annotation <- function() {
       message("Added votes from ", tool_name, " (annotation column).")
       return()
     }
-    # Fallback: look for "annotation" in first column
     idx <- which(tolower(df[[1]]) == "annotation")
     if (length(idx) == 1) {
       annot_row <- df[idx, -1, drop = FALSE]
@@ -662,7 +672,6 @@ generate_consensus_annotation <- function() {
     }
   }
 
-  # Tally votes
   consensus_results_list <- list()
   for (cluster in sort(names(votes_by_cluster))) {
     vote_df <- votes_by_cluster[[cluster]]
@@ -714,11 +723,6 @@ generate_consensus_annotation <- function() {
 
 # ==============================================================================
 # STEP: APPLY LABELS
-# Reads the consensus TSV, stamps annotation columns onto TN.combined_dim30.rds
-# (updates it in-place so downstream tools always see current labels), writes
-# TN.combined_annotated.rds in the annotation output dir, generates annotated
-# UMAP plots in annotation_plots/, and optionally copies the preprocessing UMAP
-# plots from --plots into annotation_plots/ for side-by-side comparison.
 # ==============================================================================
 
 apply_labels <- function(TN.combined) {
@@ -734,7 +738,6 @@ apply_labels <- function(TN.combined) {
   consensus_data$Cluster <- as.character(consensus_data$Cluster)
   consensus_data <- get_confident_labels(consensus_data, min_percent = 50)
 
-  # Resolve the active resolution
   res_col <- resolve_res_col(TN.combined, opt$resolution)
   if (!is.null(res_col)) {
     Idents(TN.combined) <- res_col
@@ -743,105 +746,103 @@ apply_labels <- function(TN.combined) {
 
   current_ids <- levels(TN.combined)
 
-  # Build label mappings: detailed ("C0_T cells") and clean ("T cells")
   new_names_detailed <- setNames(paste0("C", current_ids, "_Unknown"), current_ids)
   new_names_clean    <- setNames(rep("Unknown", length(current_ids)), current_ids)
 
-  # Use the re-tallied, synonym-merged confidence column (not the raw Top_Cell_Type,
-  # which can show false ties like "Mast cell" vs "Mast cells" as separate winners)
   label_col <- "Confident_Cell_Type"
 
   tiebreak_log <- list()
-  final_ctype_by_cluster <- character(0)   # clean_id -> final (post-tiebreak) ctype
+  final_ctype_by_cluster <- character(0)
 
-for (id in current_ids) {
-  clean_id  <- gsub("^X", "", id)
-  match_row <- consensus_data[consensus_data$Cluster == clean_id, ]
-  if (nrow(match_row) > 0) {
-    ctype <- trimws(gsub(";.*", "", match_row[[label_col]][1]))
+  for (id in current_ids) {
+    clean_id  <- strip_cluster_prefix(id)
+    match_row <- consensus_data[consensus_data$Cluster == clean_id, ]
+    if (nrow(match_row) > 0) {
+      ctype <- trimws(gsub(";.*", "", match_row[[label_col]][1]))
 
-    if (ctype == "Ambiguous" || grepl("\\(mixed\\)$", ctype)) {
-      raw_winners <- trimws(strsplit(match_row$Top_Cell_Type[1], ";")[[1]])
-      resolved <- resolve_tie_with_markers(TN.combined, clean_id, res_col, raw_winners)
-      if (!is.null(resolved)) {
-        message(sprintf("Cluster %s: marker tie-break '%s' -> '%s' (candidates: %s)",
-                         clean_id, ctype, resolved, paste(raw_winners, collapse = ", ")))
-        tiebreak_log[[clean_id]] <- data.frame(Cluster = clean_id, Was = ctype,
-                                                Resolved = resolved,
-                                                Candidates = paste(raw_winners, collapse = "; "))
-        ctype <- resolved
+      if (ctype == "Ambiguous" || grepl("\\(mixed\\)$", ctype)) {
+        raw_winners <- trimws(strsplit(match_row$Top_Cell_Type[1], ";")[[1]])
+        resolved <- resolve_tie_with_markers(TN.combined, clean_id, res_col, raw_winners)
+        if (!is.null(resolved)) {
+          message(sprintf("Cluster %s: marker tie-break '%s' -> '%s' (candidates: %s)",
+                           clean_id, ctype, resolved, paste(raw_winners, collapse = ", ")))
+          tiebreak_log[[clean_id]] <- data.frame(Cluster = clean_id, Was = ctype,
+                                                  Resolved = resolved,
+                                                  Candidates = paste(raw_winners, collapse = "; "))
+          ctype <- resolved
+        }
       }
+
+      new_names_detailed[[id]]         <- paste0("C", id, "_", ctype)
+      new_names_clean[[id]]            <- ctype
+      final_ctype_by_cluster[clean_id] <- ctype
+    } else {
+      message("WARNING: no consensus row found for cluster ", clean_id,
+              " - it will be labeled 'Unknown'. Check consensus_annotation.tsv.")
     }
-
-    new_names_detailed[[id]]         <- paste0("C", id, "_", ctype)
-    new_names_clean[[id]]            <- ctype
-    final_ctype_by_cluster[clean_id] <- ctype   # remember the final (possibly tie-broken) label
   }
-}
 
-if (length(tiebreak_log) > 0) {
-  write.table(dplyr::bind_rows(tiebreak_log),
-              file.path(output_dirs$consensus, "marker_tiebreaks.tsv"),
-              sep = "\t", quote = FALSE, row.names = FALSE)
-  message(length(tiebreak_log), " cluster(s) auto-resolved via marker tie-break — see marker_tiebreaks.tsv")
-}
-  # --- Annotate object (clean types) ---
+  if (length(tiebreak_log) > 0) {
+    write.table(dplyr::bind_rows(tiebreak_log),
+                file.path(output_dirs$consensus, "marker_tiebreaks.tsv"),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+    message(length(tiebreak_log), " cluster(s) auto-resolved via marker tie-break - see marker_tiebreaks.tsv")
+  }
+
+  # --- Sanity check: warn (don't fail silently) if labels have ambiguous
+  #     tokens that 03_subset_clusters.R's substring-fallback could mis-grab
+  suspicious <- unique(final_ctype_by_cluster[grepl("Ambiguous|\\(mixed\\)|Low-confidence", final_ctype_by_cluster)])
+  if (length(suspicious) > 0) {
+    message("NOTE: the following cell_type_full labels are low-confidence/ambiguous and will require\n",
+            "      exact --celltype matches (not substring) in 03_subset_clusters.R:\n  - ",
+            paste(suspicious, collapse = "\n  - "))
+  }
+
   TN.annotated <- RenameIdents(TN.combined, new_names_clean)
 
-  # Add searchable metadata columns
-  cluster_nums            <- gsub("^C([0-9]+)_.*", "\\1", unname(new_names_detailed[as.character(Idents(TN.combined))]))
-  TN.annotated$cluster_label    <- as.character(Idents(TN.annotated))
-  TN.annotated$cell_type_short  <- as.character(Idents(TN.annotated))
+  cluster_nums                 <- gsub("^C([0-9]+)_.*", "\\1", unname(new_names_detailed[as.character(Idents(TN.combined))]))
+  TN.annotated$cluster_label   <- as.character(Idents(TN.annotated))
+  TN.annotated$cell_type_short <- as.character(Idents(TN.annotated))
+  TN.annotated$cell_type_full  <- unname(
+    final_ctype_by_cluster[strip_cluster_prefix(as.character(Idents(TN.combined)))])
 
-  # IMPORTANT: pull from the post-tiebreak lookup, NOT the raw consensus_data column,
-  # so cell_type_full stays consistent with cell_type_short after marker tie-breaking.
-  # (03_subset_clusters.R prefers cell_type_full when it exists, so this must carry
-  # the resolved label or tie-broken clusters like Mast cells become unreachable again.)
-  TN.annotated$cell_type_full   <- unname(
-    final_ctype_by_cluster[gsub("^X", "", as.character(Idents(TN.combined)))])
-
-  # --- Update TN.combined_dim30.rds in-place with annotation columns ---
+  # Carry annotation columns back onto the input object too, so any script
+  # that loaded TN.combined_dim30.rds directly still sees them, and persist
+  # the run's seed/config for provenance.
   TN.combined$cluster_label   <- TN.annotated$cluster_label
   TN.combined$cell_type_short <- TN.annotated$cell_type_short
   TN.combined$cell_type_full  <- TN.annotated$cell_type_full
-  saveRDS(TN.combined, opt$rds)
-  message("Updated TN.combined_dim30.rds with annotation columns: ", opt$rds)
+  TN.annotated@misc$pipeline_seed   <- opt$seed
+  TN.annotated@misc$annotation_time <- as.character(Sys.time())
 
-  # --- Save final annotated RDS ---
   saveRDS(TN.annotated, annotated_rds)
   message("Annotated object saved: ", annotated_rds)
 
-  # --- Generate annotated UMAP plots ---
   n_types       <- length(unique(Idents(TN.annotated)))
   colors_clean  <- colorRampPalette(brewer.pal(min(n_types, 12), "Set3"))(n_types)
 
-  # Detailed: unique cluster + type label
   TN.detailed <- RenameIdents(TN.combined, new_names_detailed)
   save_plot(
     DimPlot(TN.detailed, reduction = "umap", label = TRUE, repel = TRUE) +
-      NoLegend() + ggtitle("UMAP — Cluster + Cell Type"),
-    file.path(output_dirs$annotation_plots, "UMAP_annotated_detailed.pdf")
+      NoLegend() + ggtitle("UMAP - Cluster + Cell Type"),
+    file.path(output_dirs$annotation_plots, "UMAP_annotated_detailed")
   )
 
-  # Clean labeled
   save_plot(
     DimPlot(TN.annotated, reduction = "umap", label = TRUE, repel = TRUE,
             label.size = 5) +
-      NoLegend() + ggtitle("UMAP — Cell Types (labeled)"),
-    file.path(output_dirs$annotation_plots, "UMAP_annotated_clean_labelT.pdf")
+      NoLegend() + ggtitle("UMAP - Cell Types (labeled)"),
+    file.path(output_dirs$annotation_plots, "UMAP_annotated_clean_labelT")
   )
 
-  # Clean with legend
   save_plot(
     DimPlot(TN.annotated, reduction = "umap", label = FALSE) +
       scale_color_manual(values = colors_clean) +
-      ggtitle("UMAP — Cell Types (legend)"),
-    file.path(output_dirs$annotation_plots, "UMAP_annotated_clean_labelF.pdf")
+      ggtitle("UMAP - Cell Types (legend)"),
+    file.path(output_dirs$annotation_plots, "UMAP_annotated_clean_labelF")
   )
   message("Annotated UMAP plots saved to: ", output_dirs$annotation_plots)
 
-  # --- Cell type proportion bar plots (uses the same confident/ambiguous labels
-  #     as the UMAP above, so labels stay consistent across every plot type) ---
   n_ct       <- length(unique(TN.annotated$cell_type_short))
   ct_colors  <- colorRampPalette(brewer.pal(min(n_ct, 12), "Set3"))(n_ct)
 
@@ -863,7 +864,7 @@ if (length(tiebreak_log) > 0) {
         labs(x = "Sample Group", y = "Proportion", fill = "Cell Type",
              title = "Cell Type Proportion by Sample Group") +
         theme(legend.text = element_text(size = 10)),
-      file.path(output_dirs$annotation_plots, "celltype_proportion_by_group.pdf")
+      file.path(output_dirs$annotation_plots, "celltype_proportion_by_group")
     )
   }
 
@@ -886,27 +887,25 @@ if (length(tiebreak_log) > 0) {
              title = "Cell Type Proportion by Sample") +
         theme(legend.text = element_text(size = 10),
               axis.text.x = element_text(angle = 45, hjust = 1)),
-      file.path(output_dirs$annotation_plots, "celltype_proportion_by_sample.pdf")
+      file.path(output_dirs$annotation_plots, "celltype_proportion_by_sample")
     )
   }
 
   message("Cell type proportion plots saved to: ", output_dirs$annotation_plots)
 
-  # --- Copy preprocessing UMAP plots into annotation_plots/ ---
   if (!is.null(opt$plots) && dir.exists(opt$plots)) {
-    message("Copying preprocessing UMAP plots from: ", opt$plots)
+    message("Copying 01_preprocessing UMAP plots from: ", opt$plots)
     umap_files <- list.files(opt$plots, pattern = "umap.*\\.(pdf|png)$",
                              full.names = TRUE, recursive = FALSE)
     if (length(umap_files) > 0) {
       file.copy(umap_files, output_dirs$annotation_plots, overwrite = TRUE)
-      message("Copied ", length(umap_files), " UMAP plot(s) from preprocessing into: ",
+      message("Copied ", length(umap_files), " UMAP plot(s) into: ",
               output_dirs$annotation_plots)
     } else {
-      message("No UMAP plots found in preprocessing plots directory: ", opt$plots)
+      message("No UMAP plots found in: ", opt$plots)
     }
   }
 
-  # --- Annotation summary table ---
   summ <- TN.annotated@meta.data %>%
     select(cluster_label, cell_type_short, cell_type_full) %>%
     distinct() %>%
@@ -920,7 +919,7 @@ if (length(tiebreak_log) > 0) {
 }
 
 # ==============================================================================
-# STEP: COMBINED PLOTS (cluster numbers only — no annotation required)
+# STEP: COMBINED PLOTS (cluster numbers only - no annotation required)
 # ==============================================================================
 
 generate_combined_plots <- function(TN.combined) {
@@ -934,28 +933,27 @@ generate_combined_plots <- function(TN.combined) {
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = TRUE, label.size = 5,
             repel = TRUE, pt.size = 0.8) +
-      NoLegend() + ggtitle("UMAP — Cluster Numbers"),
-    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_labelT.pdf")
+      NoLegend() + ggtitle("UMAP - Cluster Numbers"),
+    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_labelT")
   )
   save_plot(
     DimPlot(TN.combined, reduction = "umap", label = FALSE, pt.size = 0.8) +
-      ggtitle("UMAP — Cluster Numbers (legend)"),
-    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_labelF.pdf")
+      ggtitle("UMAP - Cluster Numbers (legend)"),
+    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_labelF")
   )
   save_plot(
     DimPlot(TN.combined, reduction = "umap", split.by = "orig.ident1",
             label = TRUE, label.size = 3, repel = TRUE, pt.size = 0.5, ncol = 3) +
-      NoLegend() + ggtitle("UMAP — Clusters (split by condition)"),
-    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_splitorigident1.pdf")
+      NoLegend() + ggtitle("UMAP - Clusters (split by condition)"),
+    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_splitorigident1")
   )
   save_plot(
     DimPlot(TN.combined, reduction = "umap", split.by = "orig.ident2",
             label = TRUE, label.size = 3, repel = TRUE, pt.size = 0.5, ncol = 3) +
-      NoLegend() + ggtitle("UMAP — Clusters (split by sample)"),
-    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_splitorigident2.pdf")
+      NoLegend() + ggtitle("UMAP - Clusters (split by sample)"),
+    file.path(output_dirs$combined_plots, "TNcombined_umap_clusters_splitorigident2")
   )
 
-  # Cluster proportion by condition (ident1)
   Cluster_prop_ident1 <- table(Idents(TN.combined), TN.combined$orig.ident1)
   Cluster_prop_ident1 <- round(
     sweep(Cluster_prop_ident1, MARGIN = 2, STATS = colSums(Cluster_prop_ident1), FUN = "/") * 100, 2
@@ -973,10 +971,9 @@ generate_combined_plots <- function(TN.combined) {
       labs(x = "Sample Group", y = "Proportion", fill = "Cluster",
            title = "Cluster Proportion by Sample Group") +
       theme(legend.text = element_text(size = 10)),
-    file.path(output_dirs$combined_plots, "cluster_proportion_by_group.pdf")
+    file.path(output_dirs$combined_plots, "cluster_proportion_by_group")
   )
 
-  # Cluster proportion by sample (ident2)
   Cluster_prop_ident2 <- table(Idents(TN.combined), TN.combined$orig.ident2)
   Cluster_prop_ident2 <- round(
     sweep(Cluster_prop_ident2, MARGIN = 2, STATS = colSums(Cluster_prop_ident2), FUN = "/") * 100, 2
@@ -995,7 +992,7 @@ generate_combined_plots <- function(TN.combined) {
            title = "Cluster Proportion by Sample") +
       theme(legend.text = element_text(size = 10),
             axis.text.x = element_text(angle = 45, hjust = 1)),
-    file.path(output_dirs$combined_plots, "cluster_proportion_by_sample.pdf")
+    file.path(output_dirs$combined_plots, "cluster_proportion_by_sample")
   )
 
   message("Combined plots saved to: ", output_dirs$combined_plots)
@@ -1011,47 +1008,21 @@ execute_step <- function(step) {
 
     read_rds = {
       if (is.null(opt$rds)) stop("--rds path must be specified")
-      seurat_objects <<- read_rds(opt$rds)
+      seurat_objects <<- read_rds_step(opt$rds)
       saveRDS(seurat_objects, file.path(output_base, "seurat_objects.rds"))
     },
 
-    singleR = {
-      load_seurat_objects()
-      run_singleR(seurat_objects$Joined_TN.combined)
-    },
-
-    markers = {
-      load_seurat_objects()
-      plot_markers(seurat_objects$Joined_TN.combined)
-    },
-
-    celliD = {
-      load_seurat_objects()
-      run_celliD(seurat_objects$TN.combined)
-    },
-
-    scCATCH = {
-      load_seurat_objects()
-      run_scCATCH(seurat_objects$TN.combined, seurat_objects$Joined_TN.combined)
-    },
-
-    consensus = {
-      generate_consensus_annotation()
-    },
-
-    apply_labels = {
-      load_seurat_objects()
-      apply_labels(seurat_objects$TN.combined)
-    },
-
-    combined_plots = {
-      load_seurat_objects()
-      generate_combined_plots(seurat_objects$TN.combined)
-    },
+    singleR = { load_seurat_objects(); run_singleR(seurat_objects$Joined_TN.combined) },
+    markers = { load_seurat_objects(); plot_markers(seurat_objects$Joined_TN.combined) },
+    celliD  = { load_seurat_objects(); run_celliD(seurat_objects$TN.combined) },
+    scCATCH = { load_seurat_objects(); run_scCATCH(seurat_objects$TN.combined, seurat_objects$Joined_TN.combined) },
+    consensus = { generate_consensus_annotation() },
+    apply_labels = { load_seurat_objects(); apply_labels(seurat_objects$TN.combined) },
+    combined_plots = { load_seurat_objects(); generate_combined_plots(seurat_objects$TN.combined) },
 
     all = {
       if (is.null(opt$rds)) stop("--rds path must be specified")
-      seurat_objects <<- read_rds(opt$rds)
+      seurat_objects <<- read_rds_step(opt$rds)
       saveRDS(seurat_objects, file.path(output_base, "seurat_objects.rds"))
       run_singleR(seurat_objects$Joined_TN.combined)
       plot_markers(seurat_objects$Joined_TN.combined)
@@ -1074,6 +1045,3 @@ execute_step <- function(step) {
 execute_step(opt$step)
 message("\nStep '", opt$step, "' completed at ", Sys.time())
 
-sink(type = "message")
-sink(type = "output")
-close(log_conn)

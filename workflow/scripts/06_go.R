@@ -8,6 +8,10 @@
 # instead of "fibroblast"), which silently merged every celltype's macro-view
 # GO/KEGG results into a single stray "ALL/pathways/" folder.
 #
+# CONTRACT WITH 05: --indir must be the SAME base directory 05_dge.R used,
+# since this script scans <indir>/<celltype>/dge_pseudobulk/*.csv for its
+# input and writes to <indir>/<celltype>/pathways/.
+#
 # Usage:
 #   Rscript 06_go.R --indir results/03_subsets
 
@@ -21,19 +25,29 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
+source("workflow/scripts/00_utils.R")
+
 # ==============================================================================
 # 0. COMMAND-LINE INTERFACE
 # ==============================================================================
 option_list <- list(
-  make_option(c("-i", "--indir"), type = "character", default = NULL,
-              help = "Base '03_subsets' directory containing one folder per celltype (same --indir as 05_dge.R)"),
-  make_option(c("--logfc_cutoff"), type = "numeric", default = 0.5,
-              help = "Absolute log2FoldChange cutoff for calling a DE gene significant [default: 0.5, matches config.yaml pathway.logfc_cutoff]"),
-  make_option(c("--pval_cutoff"), type = "numeric", default = 0.05,
-              help = "Adjusted p-value cutoff for enrichGO/enrichKEGG and gene selection [default: 0.05, matches config.yaml pathway.pval_cutoff]"),
-  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
+  make_option(c("-i", "--indir"), type = "character", default = "results/03_subsets",
+              help = "Base directory containing one folder per celltype (SAME dir as 05_dge.R --indir) [default: results/03_subsets]"),
+  make_option(c("--config"), type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
+  make_option(c("--logfc_cutoff"), type = "numeric", default = NULL,
+              help = "Absolute log2FoldChange cutoff for calling a DE gene significant [config: pathway.logfc_cutoff]"),
+  make_option(c("--pval_cutoff"), type = "numeric", default = NULL,
+              help = "Adjusted p-value cutoff for enrichGO/enrichKEGG and gene selection [config: pathway.pval_cutoff]"),
+  make_option(c("--seed"), type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
+cfg <- get_config(opt$config)
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+opt$logfc_cutoff <- opt$logfc_cutoff %||% cfg_get(cfg, "pathway", "logfc_cutoff", default = 0.5)
+opt$pval_cutoff  <- opt$pval_cutoff  %||% cfg_get(cfg, "pathway", "pval_cutoff",  default = 0.05)
+opt$seed         <- opt$seed         %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
+set.seed(opt$seed)
 
 if (is.null(opt$indir)) {
   stop("Missing required argument: --indir (base 03_subsets directory)")
@@ -58,7 +72,7 @@ run_pathway_analysis <- function(csv_path, out_base_dir, cell_type,
 
   message(paste("\n-> Running clusterProfiler Analysis for:", clean_name))
 
-  out_dir <- file.path(out_base_dir, cell_type, "pathways")
+  out_dir <- file.path(out_base_dir, cell_type, "04_pathways")
   if (!dir.exists(out_dir)) { dir.create(out_dir, recursive = TRUE) }
 
   # Load DESeq2 DGE data
@@ -184,30 +198,13 @@ run_pathway_analysis <- function(csv_path, out_base_dir, cell_type,
 # 2. Automated Execution Loop with Automated Logging
 # ==============================================================================
 
-# --- 1. SET UP THE LOG FILE ---
-log_dir <- file.path(base_subset_dir, "logs")
-if (!dir.exists(log_dir)) { dir.create(log_dir, recursive = TRUE) }
-
-timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-log_file_path <- file.path(log_dir, paste0("pathway_analysis_", timestamp, ".log"))
-
-log_conn <- file(log_file_path, open = "wt")
-sink(log_conn, type = "output", split = TRUE) # split = TRUE prints to BOTH the screen and the file
-sink(log_conn, type = "message")
-
-message("==================================================================")
-message(paste("Log file created at:", log_file_path))
-message("=== Starting clusterProfiler Analysis (Separated KEGG/GO:BP) ===")
-message("==================================================================")
-
-# --- 2. RUN THE LOOP ---
 cell_type_folders <- list.dirs(base_subset_dir, recursive = FALSE, full.names = FALSE)
 # Exclude non-celltype scratch/marker folders (logs, dge/go .done flags, etc.)
 cell_type_folders <- cell_type_folders[cell_type_folders != "logs" & !startsWith(cell_type_folders, "_")]
 
 for (cell_type in cell_type_folders) {
 
-  dge_dir <- file.path(base_subset_dir, cell_type, "dge_pseudobulk")
+  dge_dir <- file.path(base_subset_dir, cell_type, "03_dge_pseudobulk")
   if (!dir.exists(dge_dir)) { next }
 
   dge_files <- list.files(dge_dir, pattern = "^deseq2_.*\\.csv$", full.names = TRUE, recursive = TRUE)
@@ -233,8 +230,3 @@ message("\n==================================================================")
 message("=== All Pathway Analyses Completed Successfully! ===")
 message(paste("Run finished at:", Sys.time()))
 message("==================================================================")
-
-# --- 3. CLOSE THE LOG FILE ---
-sink(type = "message")
-sink(type = "output")
-close(log_conn)

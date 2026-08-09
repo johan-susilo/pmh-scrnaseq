@@ -31,24 +31,44 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
+source("workflow/scripts/00_utils.R")
+
 # ==============================================================================
 # 1. SETUP COMMAND LINE ARGUMENTS
 # ==============================================================================
 option_list <- list(
-  make_option(c("--obj1"), type = "character", help = "Path to first celltype's *_detailed_annotated.rds"),
+  make_option(c("--basedir"), type = "character", default = "results/03_subsets",
+              help = "Base dir shared with 03/04 (default: results/03_subsets). Used to auto-derive --obj1/--obj2 from --type1/--type2 if those aren't given explicitly."),
+  make_option(c("--obj1"), type = "character", default = NULL, help = "Path to first celltype's *_detailed_annotated.rds [default: <basedir>/<type1>/processed/<type1>_detailed_annotated.rds]"),
   make_option(c("--type1"), type = "character", help = "Short name for the first celltype (used for prefixes/labels, e.g. 'fibroblast')"),
-  make_option(c("--obj2"), type = "character", help = "Path to second celltype's *_detailed_annotated.rds"),
+  make_option(c("--obj2"), type = "character", default = NULL, help = "Path to second celltype's *_detailed_annotated.rds [default: <basedir>/<type2>/processed/<type2>_detailed_annotated.rds]"),
   make_option(c("--type2"), type = "character", help = "Short name for the second celltype (e.g. 'macrophage')"),
-  make_option(c("--outdir"), type = "character", help = "Output directory"),
-  make_option(c("--min_cells"), type = "integer", default = 10, help = "Minimum number of cells required per group"),
-  make_option(c("--pval_thresh"), type = "numeric", default = 0.05, help = "P-value threshold for significant interactions"),
-  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
+  make_option(c("--outdir"), type = "character", default = NULL, help = "Output directory [default: results/04_cellchat/<type1>_<type2>]"),
+  make_option(c("--config"), type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
+  make_option(c("--min_cells"), type = "integer", default = NULL, help = "Minimum number of cells required per group [config: cellchat.min_cells]"),
+  make_option(c("--pval_thresh"), type = "numeric", default = NULL, help = "P-value threshold for significant interactions [config: cellchat.pval_thresh]"),
+  make_option(c("--seed"), type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
 )
 opt <- parse_args(OptionParser(option_list = option_list))
+cfg <- get_config(opt$config)
 
-if (is.null(opt$obj1) || is.null(opt$type1) || is.null(opt$obj2) || is.null(opt$type2) || is.null(opt$outdir)) {
-  stop("Missing required arguments: --obj1, --type1, --obj2, --type2, --outdir")
+`%||%` <- function(a, b) if (is.null(a)) b else a
+opt$min_cells   <- opt$min_cells   %||% cfg_get(cfg, "cellchat", "min_cells",   default = 10)
+opt$pval_thresh <- opt$pval_thresh %||% cfg_get(cfg, "cellchat", "pval_thresh", default = 0.05)
+opt$seed        <- opt$seed        %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
+
+if (is.null(opt$type1) || is.null(opt$type2)) {
+  stop("Missing required arguments: --type1, --type2")
 }
+
+# Auto-derive obj1/obj2/outdir from the shared 03_subsets convention if not
+# given explicitly, so a caller only needs to name the two celltypes.
+opt$obj1   <- opt$obj1   %||% file.path(opt$basedir, opt$type1, "00_data", paste0(opt$type1, "_detailed_annotated.rds"))
+opt$obj2   <- opt$obj2   %||% file.path(opt$basedir, opt$type2, "00_data", paste0(opt$type2, "_detailed_annotated.rds"))
+opt$outdir <- opt$outdir %||% file.path("results", "04_cellchat", paste0(opt$type1, "_", opt$type2))
+
+if (!file.exists(opt$obj1)) stop("--obj1 not found: ", opt$obj1, " (did 04_detail_annotation.R run for '", opt$type1, "'?)")
+if (!file.exists(opt$obj2)) stop("--obj2 not found: ", opt$obj2, " (did 04_detail_annotation.R run for '", opt$type2, "'?)")
 
 dir.create(opt$outdir, recursive = TRUE, showWarnings = FALSE)
 

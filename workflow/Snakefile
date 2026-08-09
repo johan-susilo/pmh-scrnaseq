@@ -25,15 +25,11 @@ rule all:
         # Preprocessing & Global Annotation
         os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds"),
         os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "TN.combined_annotated.rds"),
-        # Per-celltype subsetting & detailed annotation
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_subset_processed.rds"), celltype=CELLTYPES),
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES),
-        # DGE (pseudobulk) + downstream GO/KEGG pathway enrichment (run once across all celltypes)
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_subset_processed.rds"), celltype=CELLTYPES),
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES),
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "05_pseudotime", "pseudotime_values.csv"), celltype=CELLTYPES),
         os.path.join(OUTDIR, "03_subsets", "_dge.done"),
         os.path.join(OUTDIR, "03_subsets", "_go.done"),
-        # Per-celltype pseudotime
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global", "pseudotime_values.csv"), celltype=CELLTYPES),
-        # Pairwise CellChat cross-talk
         CELLCHAT_OUTPUTS
 
 rule preprocessing:
@@ -43,6 +39,7 @@ rule preprocessing:
         rds = os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds")
     log:
         os.path.join(OUTDIR, "logs", "01_preprocessing.log")
+    threads: config["preprocessing"].get("threads", 8)
     params:
         datadir = DATADIR,
         outdir = os.path.join(OUTDIR, "01_preprocessing"),
@@ -58,7 +55,7 @@ rule preprocessing:
             -o {params.outdir} \
             -s all \
             -r {params.res} \
-            -c 8 &> {log}
+            -c {threads} &> {log}  
         """
 
 rule global_annotation:
@@ -92,7 +89,7 @@ rule subset_clusters:
     input:
         annotated_rds = rules.global_annotation.output.annotated_rds
     output:
-        subset_rds = os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_subset_processed.rds")
+        subset_rds = os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_subset_processed.rds")
     log:
         os.path.join(OUTDIR, "logs", "03_subset_{celltype}.log")
     params:
@@ -113,7 +110,7 @@ rule detail_annotation:
     input:
         subset_rds = rules.subset_clusters.output.subset_rds
     output:
-        detailed_rds = os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds")
+        detailed_rds = os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_detailed_annotated.rds")
     log:
         os.path.join(OUTDIR, "logs", "04_detail_annotation_{celltype}.log")
     params:
@@ -137,7 +134,7 @@ rule dge:
     # script processes all celltype folders under --indir in a single pass.
     input:
         detailed = expand(
-            os.path.join(OUTDIR, "03_subsets", "{celltype}", "processed", "{celltype}_detailed_annotated.rds"),
+            os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_detailed_annotated.rds"),
             celltype=CELLTYPES
         )
     output:
@@ -178,11 +175,11 @@ rule pseudotime:
     input:
         detailed_rds = rules.detail_annotation.output.detailed_rds
     output:
-        pseudotime_csv = os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global", "pseudotime_values.csv")
+        pseudotime_csv = os.path.join(OUTDIR, "03_subsets", "{celltype}", "05_pseudotime", "pseudotime_values.csv")
     log:
         os.path.join(OUTDIR, "logs", "07_pseudotime_{celltype}.log")
     params:
-        outdir = os.path.join(OUTDIR, "03_subsets", "{celltype}", "pseudotime_global")
+        outdir = os.path.join(OUTDIR, "03_subsets", "{celltype}", "05_pseudotime")
     shell:
         """
         eval "$(mamba shell hook --shell bash)"
@@ -198,8 +195,8 @@ rule cellchat:
     # Runs on the `cellchat` mamba env (kept separate from seurat_env) due to
     # CellChat's Matrix/igraph version pinning conflicting with Seurat/monocle3.
     input:
-        obj1 = os.path.join(OUTDIR, "03_subsets", "{type1}", "processed", "{type1}_detailed_annotated.rds"),
-        obj2 = os.path.join(OUTDIR, "03_subsets", "{type2}", "processed", "{type2}_detailed_annotated.rds")
+        obj1 = os.path.join(OUTDIR, "03_subsets", "{type1}", "00_data", "{type1}_detailed_annotated.rds"),
+        obj2 = os.path.join(OUTDIR, "03_subsets", "{type2}", "00_data", "{type2}_detailed_annotated.rds")
     output:
         rds = os.path.join(OUTDIR, "04_cellchat", "{type1}_{type2}", "{type1}_{type2}_cellchat.rds")
     log:

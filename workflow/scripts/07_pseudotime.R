@@ -16,10 +16,15 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
+source("workflow/scripts/00_utils.R")
+
 # Command-line Interface ----------------------------------------------------
+# CONTRACT: --rds is normally a <celltype>_detailed_annotated.rds from
+# results/03_subsets/<celltype>/processed/ (04_detail_annotation.R's output),
+# since this script requires a `Detailed_Label` column.
 option_list <- list(
   make_option(c("-r", "--rds"), type = "character", default = NULL,
-              help = "Path to RDS file (TN.combined_dim30.rds)"),
+              help = "Path to a *_detailed_annotated.rds (from 04_detail_annotation.R)"),
   make_option(c("-c", "--clusters"), type = "character", default = NULL,
               help = "Comma-separated list of cluster IDs to include (e.g., '0,2,3,6,15')"),
   make_option(c("--all_clusters"), action = "store_true", default = FALSE,
@@ -28,29 +33,25 @@ option_list <- list(
               help = "Output directory [default: output/pseudotime]"),
   make_option(c("--method"), type = "character", default = "monocle3",
               help = "Trajectory inference method: monocle3 [default: monocle3]"),
-  make_option(c("--root_state"), type = "character", default = "NULL",
-              help = "Root cluster (Detailed_Label) for pseudotime ordering. Use 'NULL' to auto-detect the cluster with the highest Healthy proportion [default: NULL, matches config.yaml trajectory.root_state]"),
-  make_option(c("--seed"), type = "integer", default = 42, help = "Global random seed for reproducibility")
+  make_option(c("--config"), type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
+  make_option(c("--root_state"), type = "character", default = NULL,
+              help = "Root cluster (Detailed_Label) for pseudotime ordering. Use 'NULL' to auto-detect the cluster with the highest Healthy proportion [config: trajectory.root_state]"),
+  make_option(c("--seed"), type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
 )
 
 parser <- OptionParser(option_list = option_list)
 opt <- parse_args(parser)
+cfg <- get_config(opt$config)
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+opt$root_state <- opt$root_state %||% as.character(cfg_get(cfg, "trajectory", "root_state", default = "NULL"))
+opt$seed       <- opt$seed       %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
+set.seed(opt$seed)
 
 # Create output directory
 output_dir <- opt$output
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Set up logging
-log_file <- file.path(output_dir, paste0("pseudotime_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log"))
-log_conn <- file(log_file, open = "wt")
-sink(log_conn, type = "output", split = TRUE)
-sink(log_conn, type = "message")
-
-message("============================================================")
-message("Pseudotime Analysis Pipeline")
-message("============================================================")
-message("Log file: ", log_file)
-message("Started at: ", Sys.time())
 
 # Helper function to safely save PDF plots
 safe_save_pdf <- function(plot_obj, filepath, w = 15, h = 15) {
@@ -477,7 +478,3 @@ message("\n============================================================")
 message("Completed at: ", Sys.time())
 message("============================================================")
 
-# Close log file
-sink(type = "message")
-sink(type = "output")
-close(log_conn)
