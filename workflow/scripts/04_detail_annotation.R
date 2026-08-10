@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Usage:
-#   Rscript 04_detail_annotation.R -c fibroblast \
-#     -i results/03_subsets/fibroblast/processed/fibroblast_subset_processed.rds \
+#   Rscript 04_detail_annotation.R -c fibroblasts \
+#     -i results/03_subsets/fibroblasts/processed/fibroblast_subset_processed.rds \
 #     -o results/03_subsets
 #
 # CONTRACT WITH 03: expects `<celltype>_subset_processed.rds` with
@@ -33,7 +33,7 @@ source("workflow/scripts/00_utils.R")
 # ==============================================================================
 option_list <- list(
   make_option(c("-i", "--input"),    type = "character", help = "Path to the subset RDS object (from 03_subset_clusters.R)"),
-  make_option(c("-c", "--celltype"), type = "character", help = "The cell type being processed (e.g. 'fibroblast' or 'macrophage')"),
+  make_option(c("-c", "--celltype"), type = "character", help = "The cell type being processed (e.g. 'fibroblasts' or 'macrophages')"),
   make_option(c("-o", "--outdir"),   type = "character", default = "results/03_subsets", help = "Base output directory. MUST be the SAME directory 03_subset_clusters.R wrote to -- 04 writes <outdir>/<celltype>/processed/<celltype>_detailed_annotated.rds alongside 03's <celltype>_subset_processed.rds in that same folder, and 05_dge.R/06_go.R scan that shared tree for both files."),
   make_option(c("--config"),         type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
   make_option(c("--seed"),                type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]"),
@@ -138,34 +138,75 @@ f1_f8_colors <- c(
   "F7_Myofibroblast"              = "#5599FF",
   "F8_Fascia_like_Myofibroblast"  = "#F292BF"
 )
+
 macrophage_dictionary <- list(
-  "M0_Non_Polarized" = c(
-    "CD68", "LYZ", "CSF1R", "AIF1", "TYROBP", 
-    "FCER1G", "CTSB", "CTSD", "MERTK", "VSIG4"
+  # Steady-State / Healthy Skin Macrophages
+  # Grounded in healthy skin quantitative proteomics and MERFISH resident profiles
+  "M_Homeostatic_Resident" = c(
+    "CSF1R", "MERTK", "F13A1",
+    "C1QA", "C1QB", "C1QC",
+    "FOLR2", "VSIG4", "C3AR1",
+    "LILRB4", "MRC1", "CD163",
+    "MS4A6A", "ABCA1", "GPX3" 
   ),
-  "M1_Inflammatory" = c(
-    "IL1B", "TNF", "IL6", "CXCL9", "CXCL10", 
-    "CXCL11", "CD80", "CD86", "CCL3", "CCL4", "STAT1"
+
+  # Acute GvHD / Tissue-Remodelling & Regulatory
+  # Markers driving active wound healing, angiogenesis, and Treg signaling
+  "M_Acute_GvHD_Repair_Regulatory" = c(
+    "CD163", "F13A1", "FOLR2",
+    "MRC1", "MERTK", "VSIG4",
+    "IL10", "TGFB1", "VEGFA",
+    "TIMP1", "PLIN2", "CCL18",
+    "CCL13", "MSR1", "MARCO",
+    "LGALS9"                       # LGALS3 removed (associated with activated cDCs in human skin)
   ),
-  "M2_Wound_Healing" = c(
-    "CD163", "MRC1", "CCL18", "CCL22", "IL10", 
-    "FOLR2", "MSR1"
+
+  # Chronic GvHD / Proinflammatory
+  # Macrophages repolarized to a proinflammatory, interferon-responsive state
+  "M_Chronic_GvHD_Inflammatory" = c(
+    "CCR7", "TREM1", "IL1B",
+    "TNF", "CXCL8", "CXCL9",
+    "CXCL10", "CXCL11", "CCL3",
+    "CCL4", "IRF1", "GBP1", 
+    "CD86", "HLA-DRA", "HLA-DRB1"   # GBP5 removed (strongly T-cell enriched in skin proteomics)
+  ),
+
+  # Proliferating Macrophages (Active in situ division)
+  # Upregulated cell-cycle genes driving local macrophages proliferation in skin lesions
+  "M_Proliferating" = c(
+    "MKI67", "MYBL2", "CCND1",     # CCND1 and MYBL2 are the key paper-specific GvHD proliferation markers
+    "TOP2A", "STMN1", "TYMS", 
+    "PCNA", "MCM2", "MCM3", "MCM4", 
+    "MCM5", "MCM6", "UBE2C", "BIRC5", 
+    "CENPF", "HMGB2", "CCNB1", "CCNB2", 
+    "NUSAP1"
   )
 )
 
-macrophage_order  <- c("M0_Non_Polarized", "M1_Inflammatory", "M2_Wound_Healing")
-macrophage_colors <- c("M0_Non_Polarized" = "#A6CEE3", "M1_Inflammatory"  = "#E31A1C", "M2_Wound_Healing" = "#33A02C")
+macrophage_order  <- c(
+  "M_Homeostatic_Resident", 
+  "M_Acute_GvHD_Repair", 
+  "M_Chronic_GvHD_Inflammatory", 
+  "M_Proliferating"
+)
+
+macrophage_colors <- c(
+  "M_Homeostatic_Resident"      = "#A6CEE3", # Light Blue
+  "M_Acute_GvHD_Repair"         = "#33A02C", # Green (Repair/Resolving)
+  "M_Chronic_GvHD_Inflammatory" = "#E31A1C", # Red (Inflammation/Damage)
+  "M_Proliferating"             = "#CAB2D6"  # Light Purple
+)
 
 # ==============================================================================
 # 4. DYNAMIC AUTO-ANNOTATION ENGINE (AddModuleScore + Cluster Averaging)
 # ==============================================================================
 message("Running Cluster-Level Module Score Auto-Annotation...")
 
-if (opt$celltype == "fibroblast") {
+if (opt$celltype == "fibroblasts") {
   active_dict   <- biological_dictionary
   active_colors <- f1_f8_colors
   active_order  <- f1_f8_order
-} else if (opt$celltype == "macrophage") {
+} else if (opt$celltype == "macrophages") {
   active_dict   <- macrophage_dictionary
   active_colors <- macrophage_colors
   active_order  <- macrophage_order
@@ -173,7 +214,7 @@ if (opt$celltype == "fibroblast") {
   active_dict <- list()
 }
 
-if (opt$celltype %in% c("fibroblast", "macrophage")) {
+if (opt$celltype %in% c("fibroblasts", "macrophages")) {
 
   clean_dictionary <- function(dict, obj, min_genes = 3) {
     cleaned_dict <- list()
@@ -214,12 +255,6 @@ if (opt$celltype %in% c("fibroblast", "macrophage")) {
     dplyr::select(seurat_clusters, dplyr::all_of(prog_cols)) %>%
     dplyr::group_by(seurat_clusters) %>%
     dplyr::summarise(dplyr::across(dplyr::all_of(prog_cols), mean), .groups = "drop")
-
-  # Normalize by gene set size to penalize massive sets like F6/F7.
-  gene_counts <- sapply(active_dict_clean, length)
-  for (i in seq_along(prog_cols)) {
-    score_df[[prog_cols[i]]] <- score_df[[prog_cols[i]]] / sqrt(gene_counts[i])
-  }
 
   message("Generating QC Module Score Heatmap and UMAPs...")
 
@@ -341,7 +376,7 @@ for (category_name in names(active_dict)) {
 # ==============================================================================
 # 6. FIBROBLAST-SPECIFIC DOWNSTREAM TASKS (Bypassed for other celltypes)
 # ==============================================================================
-if (opt$celltype == "fibroblast") {
+if (opt$celltype == "fibroblasts") {
   message("Running Fibroblast-specific downstream analysis (Mucin, Lineages, Condition labels)...")
 
   paper_signature_genes <- c(
@@ -398,9 +433,9 @@ if (opt$celltype == "fibroblast") {
 }
 
 # ==============================================================================
-# 7. MUCIN & ECM ANALYSIS (fibroblast only)
+# 7. MUCIN & ECM ANALYSIS (fibroblasts only)
 # ==============================================================================
-if (opt$celltype == "fibroblast") {
+if (opt$celltype == "fibroblasts") {
   mucin_ecm_genes <- c("MUC1", "HAS1", "HAS2", "MMP1", "MUC12", "HAS3", "VCAN", "FN1",
                         "CEMIP", "HYAL1", "HYAL2", "CTGF", "TGFBI", "COL1A1", "COL1A2",
                         "COL3A1", "COL5A1", "COL6A1", "SPARC", "POSTN", "ACTA2", "TAGLN",

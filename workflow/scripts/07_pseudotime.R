@@ -53,19 +53,6 @@ output_dir <- opt$output
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 
-# Helper function to safely save PDF plots
-safe_save_pdf <- function(plot_obj, filepath, w = 15, h = 15) {
-  tryCatch({
-    pdf(filepath, width = w, height = h)
-    on.exit(dev.off(), add = TRUE)
-    print(plot_obj)
-    message("Saved plot: ", filepath)
-  }, error = function(e) {
-    message("Warning: Failed to save plot ", filepath, ": ", conditionMessage(e))
-    if (length(dev.list()) > 0) dev.off()
-  })
-}
-
 # Determine the root cluster for pseudotime ordering -------------------------
 # If --root_state is "NULL" (the default, matching config.yaml), auto-detect
 # the cluster with the highest proportion of Healthy cells. Otherwise use the
@@ -159,7 +146,7 @@ message("Root cluster (original label): ", root_cluster_original)
 message("\nGenerating UMAP plot of selected clusters...")
 p_umap <- DimPlot(TN.subset, reduction = "umap", label = TRUE, pt.size = 0.8) +
   ggtitle("Selected Clusters for Pseudotime")
-safe_save_pdf(p_umap, file.path(output_dir, "subset_umap.pdf"))
+save_plot(p_umap, file.path(output_dir, "subset_umap"))
 
 root_cluster <- root_cluster_original
 message("Using root cluster: ", root_cluster)
@@ -243,7 +230,7 @@ p_trajectory <- plot_cells(cds,
     plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
   )
 
-safe_save_pdf(p_trajectory, file.path(output_dir, "trajectory_by_cluster.pdf"))
+save_plot(p_trajectory, file.path(output_dir, "trajectory_by_cluster"))
 
 
 
@@ -274,15 +261,42 @@ p_pseudotime <- plot_cells(cds,
 group_label_size = 6) +
   ggtitle("Cells Ordered by Pseudotime") +
   theme(
-    text = element_text(size = 18),                    # <-- Global text size
-    axis.title = element_text(size = 20, face = "bold"), # <-- Axis titles (UMAP 1 / UMAP 2)
-    axis.text = element_text(size = 16),               # <-- Axis tick numbers
+    text = element_text(size = 18),                    
+    axis.title = element_text(size = 20, face = "bold"), 
+    axis.text = element_text(size = 16),               
     legend.title = element_text(size = 18, face = "bold"),
     legend.text = element_text(size = 16),
     plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
   )
 
-safe_save_pdf(p_pseudotime, file.path(output_dir, "pseudotime.pdf"))
+# CHANGED: Use save_plot and remove the .pdf extension
+save_plot(p_pseudotime, file.path(output_dir, "pseudotime"), w = 15, h = 15)
+
+# ==============================================================================
+# CUSTOM PNG/PDF PLOT
+# ==============================================================================
+message("\nGenerating custom pseudotime plot...")
+
+p_custom <- plot_cells(
+  cds, 
+  reduction_method = "UMAP",
+  color_cells_by = "pseudotime",
+  show_trajectory_graph = FALSE,
+  label_cell_groups = FALSE,
+  label_leaves = FALSE,
+  label_branch_points = FALSE,
+  cell_size = 1.0
+)
+
+p_custom$layers[[1]]$aes_params$colour <- NA
+
+p_custom <- p_custom +
+  scale_color_gradient(
+    low = "#2C7BB6",
+    high = "#F9A602"
+  ) + guides(color = guide_colorbar(title = "Pseudotime"))
+
+save_plot(p_custom, file.path(output_dir, "pseudotime_custom"), w = 8, h = 8)
 
 # Combined trajectory plots
 message("\nGenerating combined trajectory plots...")
@@ -304,7 +318,7 @@ group_label_size = 6) +
     plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
   )
 
-safe_save_pdf(p_combined, file.path(output_dir, "trajectory_combined.pdf"))
+save_plot(p_combined, file.path(output_dir, "trajectory_combined"))
 
 # Split by sample if orig.ident1 exists
 if ("orig.ident1" %in% colnames(colData(cds))) {
@@ -326,7 +340,7 @@ group_label_size = 6) +
     plot.title = element_text(size = 22, face = "bold", hjust = 0.5)
   )
 
-  safe_save_pdf(p_by_sample, file.path(output_dir, "trajectory_by_sample.pdf"))
+  save_plot(p_by_sample, file.path(output_dir, "trajectory_by_sample"))
 }
 
 # Save results --------------------------------------------------------------
@@ -401,7 +415,7 @@ p_violin <- ggplot(plot_df, aes(x = cluster, y = pseudotime, fill = cluster)) +
        y = "Pseudotime") +
   coord_flip()
 
-safe_save_pdf(p_violin, file.path(output_dir, "pseudotime_violin_by_cluster.pdf"))
+save_plot(p_violin, file.path(output_dir, "pseudotime_violin_by_cluster"))
 
 # Find genes that change as a function of pseudotime ------------------------
 message("\n============================================================")
@@ -445,7 +459,7 @@ tryCatch({
     strip.text = element_text(size = 22, face = "bold") # <-- Makes the Gene Names at the top of each box much larger
   )
 
-    safe_save_pdf(p_genes, file.path(output_dir, "top_pseudotime_genes.pdf"), w = 18, h = 18)
+    save_plot(p_genes, file.path(output_dir, "top_pseudotime_genes"), w = 18, h = 18)
   }
 
 }, error = function(e) {

@@ -37,10 +37,14 @@ preprocessing:
 # ------------------------------------------------------------------------------
 subsetting:
   celltypes:
-    - "fibroblast"
-    - "macrophage"
-    - "Mast"
-    - "keratinocyte"
+    - "fibroblasts"
+    - "macrophages"
+    - "mast_cells"
+    - "keratinocytes"
+    - "pericytes"
+    - "melanocytes"
+    - "t_cells"
+  
   pcs: 20             # Extracted from hardcoded pcs_to_use
   resolutions: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2]
   uncertain_margin: 0.05       # relative floor, applied when top score is large
@@ -77,4 +81,4 @@ cellchat:
   min_cells: 10       # Extracted from filterCommunication
   pval_thresh: 0.05   # Extracted from subsetCommunication
   pairs:
-    - ["fibroblast", "macrophage"]
+    - ["fibroblasts", "macrophages"]

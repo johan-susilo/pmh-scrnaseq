@@ -270,7 +270,8 @@ if ("cell_type_full" %in% colnames(pmh_obj@meta.data)) {
 }
 
 available_idents <- levels(Idents(pmh_obj))
-target_idents <- match_target_clusters(opt$celltype, available_idents)
+search_term <- gsub("_", " ", opt$celltype)
+target_idents <- match_target_clusters(search_term, available_idents)
 
 message("Subsetting the following matched cluster label(s):\n - ", paste(target_idents, collapse = "\n - "))
 
