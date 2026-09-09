@@ -10,19 +10,19 @@ CELLTYPES = config["subsetting"]["celltypes"]
 UNCERTAIN_MARGIN = config.get("subsetting", {}).get("uncertain_margin", 0.10)
 UNCERTAIN_ABS_MARGIN = config.get("subsetting", {}).get("uncertain_abs_margin", 0.002)
 
-# List of [type1, type2] pairs to run CellChat on. Defaults to fibroblast/macrophage
-# if not specified in config.yaml under `cellchat: pairs:`.
-CELLCHAT_PAIRS = config.get("cellchat", {}).get("pairs", [["fibroblast", "macrophage"]])
+# CellChat dynamic network parsing
+CELLCHAT_NETWORKS = config.get("cellchat", {}).get("networks", [["fibroblasts", "macrophages", "mast_cells"]])
+NETWORK_MAP = {"_".join(net): ",".join(net) for net in CELLCHAT_NETWORKS}
+
 CELLCHAT_OUTPUTS = [
-    os.path.join(OUTDIR, "04_cellchat", f"{t1}_{t2}", f"{t1}_{t2}_cellchat.rds")
-    for t1, t2 in CELLCHAT_PAIRS
+    os.path.join(OUTDIR, "04_cellchat", folder_name, "multiway_cellchat.rds")
+    for folder_name in NETWORK_MAP.keys()
 ]
 
 
 
 rule all:
     input:
-        # Preprocessing & Global Annotation
         os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds"),
         os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "TN.combined_annotated.rds"),
         expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_subset_processed.rds"), celltype=CELLTYPES),
@@ -30,7 +30,10 @@ rule all:
         expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "05_pseudotime", "pseudotime_values.csv"), celltype=CELLTYPES),
         os.path.join(OUTDIR, "03_subsets", "_dge.done"),
         os.path.join(OUTDIR, "03_subsets", "_go.done"),
-        CELLCHAT_OUTPUTS
+        os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_dge.done"),
+        os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_go.done"),
+        CELLCHAT_OUTPUTS,
+        os.path.join(OUTDIR, "04_cellchat", "Global_Overview", "macro_global_cellchat.rds")
 
 rule preprocessing:
     input:
@@ -83,6 +86,51 @@ rule global_annotation:
             -o {params.outdir} \
             -r {params.res} \
             -p {params.plots_dir} &> {log}
+        """
+
+rule global_dge:
+    input:
+        annotated_rds = rules.global_annotation.output.annotated_rds,
+        script = "workflow/scripts/02b_global_dge.R"
+    output:
+        flag = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_dge.done")
+    log:
+        os.path.join(OUTDIR, "logs", "02b_global_dge.log")
+    params:
+        outdir = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+        
+        Rscript {input.script} \
+            -i {input.annotated_rds} \
+            -o {params.outdir} &> {log}
+            
+        touch {output.flag}
+        """
+
+rule global_go:
+    input:
+        flag = rules.global_dge.output.flag,
+        script = "workflow/scripts/02c_global_go.R"
+    output:
+        flag = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_go.done")
+    log:
+        os.path.join(OUTDIR, "logs", "02c_global_go.log")
+    params:
+        indir = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "05_dge_pseudobulk"),
+        outdir = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "pathways")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+        
+        Rscript {input.script} \
+            -i {params.indir} \
+            -o {params.outdir} &> {log}
+            
+        touch {output.flag}
         """
 
 rule subset_clusters:
@@ -192,24 +240,48 @@ rule pseudotime:
         """
 
 rule cellchat:
-    # Runs on the `cellchat` mamba env (kept separate from seurat_env) due to
-    # CellChat's Matrix/igraph version pinning conflicting with Seurat/monocle3.
     input:
-        obj1 = os.path.join(OUTDIR, "03_subsets", "{type1}", "00_data", "{type1}_detailed_annotated.rds"),
-        obj2 = os.path.join(OUTDIR, "03_subsets", "{type2}", "00_data", "{type2}_detailed_annotated.rds")
+        # Require all possible detailed RDS files to be done first
+        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES)
     output:
-        rds = os.path.join(OUTDIR, "04_cellchat", "{type1}_{type2}", "{type1}_{type2}_cellchat.rds")
+        # Dynamically matches the exact combo string (e.g., fibroblasts_macrophages_mast_cells)
+        rds = os.path.join(OUTDIR, "04_cellchat", "{network_name}", "multiway_cellchat.rds")
     log:
-        os.path.join(OUTDIR, "logs", "08_cellchat_{type1}_{type2}.log")
+        os.path.join(OUTDIR, "logs", "08_cellchat_{network_name}.log")
     params:
-        outdir = os.path.join(OUTDIR, "04_cellchat", "{type1}_{type2}")
+        basedir = os.path.join(OUTDIR, "03_subsets"),
+        outdir = os.path.join(OUTDIR, "04_cellchat", "{network_name}"),
+        # Safely grab the comma-separated string straight from our Python dictionary
+        celltypes_comma = lambda wildcards: NETWORK_MAP[wildcards.network_name]
     shell:
         """
         eval "$(mamba shell hook --shell bash)"
         mamba activate cellchat
 
         Rscript workflow/scripts/08_cellchat_analysis.R \
-            --obj1 {input.obj1} --type1 {wildcards.type1} \
-            --obj2 {input.obj2} --type2 {wildcards.type2} \
+            --basedir {params.basedir} \
+            --celltypes "{params.celltypes_comma}" \
             --outdir {params.outdir} &> {log}
+        """
+
+rule global_cellchat:
+    input:
+        # Grabs the annotated global object directly from the step 2 output
+        annotated_rds = rules.global_annotation.output.annotated_rds,
+        script = "workflow/scripts/08b_global_cellchat.R"
+    output:
+        # A specific file to trigger this rule
+        rds = os.path.join(OUTDIR, "04_cellchat", "Global_Overview", "macro_global_cellchat.rds")
+    log:
+        os.path.join(OUTDIR, "logs", "08b_global_cellchat.log")
+    params:
+        outdir = os.path.join(OUTDIR, "04_cellchat", "Global_Overview")
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate cellchat
+
+        Rscript {input.script} \
+            -i {input.annotated_rds} \
+            -o {params.outdir} &> {log}
         """

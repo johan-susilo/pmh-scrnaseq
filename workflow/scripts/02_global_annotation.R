@@ -35,6 +35,7 @@ suppressPackageStartupMessages({
   library(parallel)
   library(future)
   library(future.apply)
+  library(ggrepel)
 })
 
 source("workflow/scripts/00_utils.R")
@@ -892,6 +893,40 @@ apply_labels <- function(TN.combined) {
   }
 
   message("Cell type proportion plots saved to: ", output_dirs$annotation_plots)
+
+  message("Generating PCA of sample cell-type proportions...")
+    # 1. Transpose matrix so Samples are rows and Cell Types are columns
+    prop_mat <- t(as.matrix(ct_prop_ident2))
+    
+    # 2. Remove any cell types that have zero variance across all samples to prevent prcomp errors
+    prop_var <- apply(prop_mat, 2, var)
+    prop_mat <- prop_mat[, prop_var > 0, drop = FALSE]
+    
+    if (ncol(prop_mat) > 1 && nrow(prop_mat) > 2) {
+      pca_prop <- prcomp(prop_mat, scale. = TRUE)
+      pca_data_prop <- as.data.frame(pca_prop$x)
+      pca_data_prop$Sample <- rownames(pca_data_prop)
+      
+      # 3. Extract condition metadata to color the PCA points
+      cond_map <- unique(TN.annotated@meta.data[, c("orig.ident2", "Condition")])
+      pca_data_prop$Condition <- cond_map$Condition[match(pca_data_prop$Sample, cond_map$orig.ident2)]
+      
+      pct_var_prop <- pca_prop$sdev^2 / sum(pca_prop$sdev^2)
+      
+      p_pca_prop <- ggplot(pca_data_prop, aes(x = PC1, y = PC2)) +
+        geom_point(aes(color = Condition), size = 6, alpha = 0.9) +
+        geom_text_repel(aes(label = Sample), size = 4, box.padding = 0.5) +
+        theme_bw(base_size = 15) +
+        ggtitle("PCA of Cell Type Proportions by Sample") +
+        labs(x = paste0("PC1 (", round(pct_var_prop[1] * 100, 2), "%)"),
+             y = paste0("PC2 (", round(pct_var_prop[2] * 100, 2), "%)"),
+             color = "Condition") +
+        theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+      
+      save_plot(p_pca_prop, file.path(output_dirs$annotation_plots, "pca_celltype_proportions"), w = 10, h = 8)
+    } else {
+      message("Not enough variance or samples to generate proportion PCA.")
+    }
 
   if (!is.null(opt$plots) && dir.exists(opt$plots)) {
     message("Copying 01_preprocessing UMAP plots from: ", opt$plots)

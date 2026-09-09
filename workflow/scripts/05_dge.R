@@ -94,6 +94,13 @@ message("Celltypes to process: ", paste(cell_types, collapse = ", "))
 run_and_save_deseq2 <- function(counts_matrix, meta, comparison_name, out_dir, title_prefix,
                                  ident_1 = opt$ident_1, ident_2 = opt$ident_2) {
 
+  valid_idx <- !is.na(meta$condition)
+  meta <- meta[valid_idx, , drop = FALSE]
+  counts_matrix <- counts_matrix[, valid_idx, drop = FALSE]
+
+  ident1_count <- sum(meta$condition == ident_1)
+  ident2_count <- sum(meta$condition == ident_2)
+
   ident1_count <- sum(meta$condition == ident_1)
   ident2_count <- sum(meta$condition == ident_2)
 

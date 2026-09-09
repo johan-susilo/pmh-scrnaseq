@@ -370,13 +370,17 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
     seur_obj$orig.ident1 <- sample_ident1
     seur_obj$orig.ident2 <- sample_ident2
     
-    seur_obj$Detailed_Condition <- case_when(
-      grepl("HTY|UA", sample_ident2, ignore.case = TRUE) ~ "Healthy",
-      grepl("AC", sample_ident2, ignore.case = TRUE) ~ "Acute",
-      grepl("CH", sample_ident2, ignore.case = TRUE) ~ "Chronic",
-      TRUE ~ "Unknown"
-    )
-    seur_obj$Condition <- ifelse(seur_obj$Detailed_Condition == "Healthy", "Healthy", "PMH")
+    # Check if either the sample name or ident2 matches the config lists
+    if (sample_ident2 %in% params$healthy_samples || sample_name %in% params$healthy_samples) {
+      seur_obj$Condition <- "Healthy"
+      seur_obj$Detailed_Condition <- "Healthy"
+    } else if (sample_ident2 %in% params$pmh_samples || sample_name %in% params$pmh_samples) {
+      seur_obj$Condition <- "PMH"
+      seur_obj$Detailed_Condition <- sample_ident2 
+    } else {
+      seur_obj$Condition <- "Unknown"
+      seur_obj$Detailed_Condition <- "Unknown"
+    }
 
     n_before <- ncol(seur_obj)
     seur_obj <- subset(seur_obj,
@@ -810,10 +814,12 @@ execute_step <- function(step) {
       message("Processing ", length(pending), " sample(s) across ", n_cores, " core(s)")
 
       params <- list(
-        doublet_rate = opt$doublet_rate,
-        min_features = opt$min_features,
-        max_features = opt$max_features,
-        max_mt       = opt$max_mt
+        doublet_rate    = opt$doublet_rate,
+        min_features    = opt$min_features,
+        max_features    = opt$max_features,
+        max_mt          = opt$max_mt,
+        healthy_samples = cfg_get(cfg, "clinical_groups", "Healthy", default = c()),
+        pmh_samples     = cfg_get(cfg, "clinical_groups", "PMH", default = c())
       )
       use_sct <- isTRUE(opt$use_sct)
 

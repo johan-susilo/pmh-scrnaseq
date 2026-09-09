@@ -103,7 +103,7 @@ if (!"Condition" %in% colnames(seu_obj@meta.data))
 # ==============================================================================
 # 3. DICTIONARIES & COLORS (FIBROBLAST & MACROPHAGE)
 # ==============================================================================
-biological_dictionary <- list(
+fibroblast_dictionary <- list(
   "F1_Superficial"                = c("APCDD1", "COL18A1", "COL23A1", "COL13A1", "NKD2", "RSPO1", "AXIN2", "WIF1"),
   "F2_Universal"                  = c("CD34", "PI16", "DPP4", "MFAP5", "PCOLCE2", "SLPI", "CD70", "LGR5"),
   "F2_F3_Perivascular"            = c("CXCL12", "APOE", "EFEMP1", "APOC1", "C7", "PLA2G2A", "PPARG", "MYOC", "GDF10"),
@@ -142,7 +142,7 @@ f1_f8_colors <- c(
 macrophage_dictionary <- list(
   # Steady-State / Healthy Skin Macrophages
   # Grounded in healthy skin quantitative proteomics and MERFISH resident profiles
-  "M_Homeostatic_Resident" = c(
+  "M_Homeostatic" = c(
     "CSF1R", "MERTK", "F13A1",
     "C1QA", "C1QB", "C1QC",
     "FOLR2", "VSIG4", "C3AR1",
@@ -152,7 +152,7 @@ macrophage_dictionary <- list(
 
   # Acute GvHD / Tissue-Remodelling & Regulatory
   # Markers driving active wound healing, angiogenesis, and Treg signaling
-  "M_Acute_GvHD_Repair_Regulatory" = c(
+  "M_Acute_Repair" = c(
     "CD163", "F13A1", "FOLR2",
     "MRC1", "MERTK", "VSIG4",
     "IL10", "TGFB1", "VEGFA",
@@ -163,7 +163,7 @@ macrophage_dictionary <- list(
 
   # Chronic GvHD / Proinflammatory
   # Macrophages repolarized to a proinflammatory, interferon-responsive state
-  "M_Chronic_GvHD_Inflammatory" = c(
+  "M_Chronic_Inflammatory" = c(
     "CCR7", "TREM1", "IL1B",
     "TNF", "CXCL8", "CXCL9",
     "CXCL10", "CXCL11", "CCL3",
@@ -184,17 +184,225 @@ macrophage_dictionary <- list(
 )
 
 macrophage_order  <- c(
-  "M_Homeostatic_Resident", 
-  "M_Acute_GvHD_Repair", 
-  "M_Chronic_GvHD_Inflammatory", 
+  "M_Homeostatic", 
+  "M_Acute_Repair", 
+  "M_Chronic_Inflammatory", 
   "M_Proliferating"
 )
 
 macrophage_colors <- c(
-  "M_Homeostatic_Resident"      = "#A6CEE3", # Light Blue
-  "M_Acute_GvHD_Repair"         = "#33A02C", # Green (Repair/Resolving)
-  "M_Chronic_GvHD_Inflammatory" = "#E31A1C", # Red (Inflammation/Damage)
+  "M_Homeostatic"      = "#A6CEE3", # Light Blue
+  "M_Acute_Repair"         = "#33A02C", # Green (Repair/Resolving)
+  "M_Chronic_Inflammatory" = "#E31A1C", # Red (Inflammation/Damage)
   "M_Proliferating"             = "#CAB2D6"  # Light Purple
+)
+
+t_cell_dictionary <- list(
+
+  # Broad T-cell identity
+  # Core genes for identifying conventional T cells in human skin scRNA-seq
+  "T_Core" = c(
+    "CD3D", "CD3E", "CD3G",
+    "TRAC", "CD2", "CD247",
+    "LCK", "MAL", "LTB",
+    "IL32", "TRBC1", "TRBC2"
+  ),
+
+
+  # Naive / Central-Memory T Cells
+  # Resting lymphoid-homing T cells; useful for identifying non-resident circulating-like cells
+  "T_Naive_CentralMemory" = c(
+    "CCR7", "SELL", "TCF7",
+    "LEF1", "MAL", "LTB",
+    "IL7R", "MALAT1",
+    "NOSIP", "LTB", "TRBC2"
+  ),
+
+
+  # Skin-Resident Memory T Cells
+  # Tissue-retention and skin-residency program reported in human skin and inflammatory dermatoses
+  "T_Skin_TRM" = c(
+    "CD69", "ITGAE", "ITGA1",
+    "CXCR6", "ZNF683",
+    "RUNX3", "CD44",
+    "RGS1", "CCL5",
+    "HOPX", "ITGB1"
+  ),
+
+
+  # CD4 Helper / Memory T Cells
+  # Conventional CD4 helper and memory phenotype; interpret with subtype-specific modules
+  "T_CD4_HelperMemory" = c(
+    "CD4", "IL7R", "LTB",
+    "MAL", "LTB", "CCR7",
+    "LTB", "MALAT1",
+    "IL32", "LTB"
+  ),
+
+
+  # Regulatory T Cells
+  # Activated and tissue-associated Treg program
+  "T_Treg_Regulatory" = c(
+    "FOXP3", "IL2RA", "CTLA4",
+    "TIGIT", "TNFRSF4",
+    "IKZF2", "LAYN",
+    "ICOS", "BATF",
+    "IL7R", "TNFRSF18"
+  ),
+
+
+  # Th1-like / Type-1 Inflammatory T Cells
+  # IFN-gamma and type-1 inflammatory program
+  "T_Th1_Type1" = c(
+    "TBX21", "CXCR3",
+    "IFNG", "TNF",
+    "CCL5", "PRDM1",
+    "GZMK", "NKG7",
+    "IL12RB2", "STAT4"
+  ),
+
+
+  # Th2 / Type-2 Skin-Inflammatory T Cells
+  # Type-2 program particularly relevant to atopic dermatitis and allergic skin inflammation
+  "T_Th2_Type2" = c(
+    "GATA3", "CCR4",
+    "IL4", "IL13",
+    "IL7R", "KLRB1",
+    "PTGDR2", "IL1RL1",
+    "CCL17", "CCL22"
+  ),
+
+
+  # Th17 / Tc17 Inflammatory T Cells
+  # IL-17-associated inflammatory program found in psoriasis and other skin diseases
+  "T_Th17_Tc17" = c(
+    "CCR6", "KLRB1",
+    "RORA", "IL23R",
+    "IL17A", "IL17F",
+    "CCL20", "IL22",
+    "CXCR6", "CXCL13",
+    "IL7R", "AHR"
+  ),
+
+
+  # Cytotoxic CD8 T Cells
+  # Effector cytotoxic program; distinguish from NK cells using CD3/TRAC expression
+  "T_CD8_Cytotoxic" = c(
+    "CD8A", "CD8B",
+    "CCL5", "NKG7",
+    "GZMK", "GZMB",
+    "GZMH", "GNLY",
+    "PRF1", "CTSW",
+    "KLRD1", "FGFBP2"
+  ),
+
+
+  # GZMK-positive Memory / Effector T Cells
+  # Less terminally differentiated cytotoxic-memory state
+  "T_GZMK_MemoryEffector" = c(
+    "GZMK", "CCL5",
+    "IL7R", "LTB",
+    "CD8A", "CD8B",
+    "CCL4", "IL32",
+    "NKG7", "CXCR6"
+  ),
+
+
+  # MAIT Cells
+  # Require TRAV1-2 or SLC4A10 together with KLRB1; KLRB1 alone is not specific
+  "T_MAIT" = c(
+    "TRAV1-2", "SLC4A10",
+    "KLRB1", "NCR3",
+    "KLRD1", "IL7R",
+    "GZMK", "CCL5",
+    "NKG7", "TRBC1"
+  ),
+
+
+  # Gamma-Delta T Cells
+  # TCR gamma-delta lineage; TRDC/TRGC genes are the most informative markers
+  "T_GammaDelta" = c(
+    "TRDC", "TRGC1", "TRGC2",
+    "CD3D", "CD3E",
+    "KLRB1", "RORA",
+    "CCR6", "IL23R",
+    "IL17A", "IL17F",
+    "CCL5", "NKG7"
+  ),
+
+
+  # Activated T Cells
+  # General activation and antigen-experience program
+  "T_Activated" = c(
+    "CD69", "IL2RA",
+    "TNFRSF4", "TNFRSF9",
+    "ICOS", "CD40LG",
+    "HLA-DRA", "HLA-DRB1",
+    "CD38", "MKI67"
+  ),
+
+
+  # Dysfunctional / Exhausted T Cells
+  # Chronic stimulation-associated program; should not be assigned using PDCD1 alone
+  "T_Exhausted_Dysfunctional" = c(
+    "PDCD1", "TOX",
+    "TOX2", "TIGIT",
+    "LAG3", "CTLA4",
+    "HAVCR2", "ENTPD1",
+    "LAYN", "TNFRSF9",
+    "BATF", "CXCL13"
+  ),
+
+
+  # Proliferating T Cells
+  # Cell-cycle state rather than an independent T-cell lineage
+  "T_Proliferating" = c(
+    "MKI67", "TOP2A",
+    "STMN1", "TYMS",
+    "PCNA", "MCM2",
+    "MCM3", "MCM4",
+    "MCM5", "MCM6",
+    "UBE2C", "BIRC5",
+    "CENPF", "HMGB2",
+    "CCNB1", "CCNB2",
+    "NUSAP1", "TUBA1B"
+  )
+)
+
+t_cell_order <- c(
+  "T_Core",                     # <--- ADDED
+  "T_Naive_CentralMemory",
+  "T_Skin_TRM",
+  "T_CD4_HelperMemory",         # <--- ADDED
+  "T_Treg_Regulatory",
+  "T_Th1_Type1",
+  "T_Th2_Type2",
+  "T_Th17_Tc17",
+  "T_CD8_Cytotoxic",
+  "T_GZMK_MemoryEffector",
+  "T_MAIT",
+  "T_GammaDelta",
+  "T_Activated",
+  "T_Exhausted_Dysfunctional",
+  "T_Proliferating"
+)
+
+t_cell_colors <- c(
+  "T_Core"                    = "#B2DF8A", # Light Green (ADDED)
+  "T_Naive_CentralMemory"     = "#A6CEE3", # Light blue
+  "T_Skin_TRM"                = "#1F78B4", # Blue
+  "T_CD4_HelperMemory"        = "#FDBF6F", # Light orange (ADDED)
+  "T_Treg_Regulatory"         = "#33A02C", # Green
+  "T_Th1_Type1"               = "#E31A1C", # Red
+  "T_Th2_Type2"               = "#FF7F00", # Orange
+  "T_Th17_Tc17"               = "#6A3D9A", # Purple
+  "T_CD8_Cytotoxic"           = "#B15928", # Brown
+  "T_GZMK_MemoryEffector"     = "#FB9A99", # Salmon
+  "T_MAIT"                    = "#CAB2D6", # Lavender
+  "T_GammaDelta"              = "#F781BF", # Pink
+  "T_Activated"               = "#FFD92F", # Yellow
+  "T_Exhausted_Dysfunctional" = "#666666", # Dark gray
+  "T_Proliferating"           = "#8DD3C7"  # Teal
 )
 
 # ==============================================================================
@@ -203,18 +411,24 @@ macrophage_colors <- c(
 message("Running Cluster-Level Module Score Auto-Annotation...")
 
 if (opt$celltype == "fibroblasts") {
-  active_dict   <- biological_dictionary
+  active_dict   <- fibroblast_dictionary
   active_colors <- f1_f8_colors
   active_order  <- f1_f8_order
 } else if (opt$celltype == "macrophages") {
   active_dict   <- macrophage_dictionary
   active_colors <- macrophage_colors
   active_order  <- macrophage_order
+} else if (opt$celltype %in% c("t_cells", "tcells", "T_cells")) {
+
+  active_dict   <- t_cell_dictionary
+  active_colors <- t_cell_colors
+  active_order  <- t_cell_order
+
 } else {
   active_dict <- list()
 }
 
-if (opt$celltype %in% c("fibroblasts", "macrophages")) {
+if (opt$celltype %in% c("fibroblasts", "macrophages", "t_cells")) {
 
   clean_dictionary <- function(dict, obj, min_genes = 3) {
     cleaned_dict <- list()
@@ -313,7 +527,7 @@ if (opt$celltype %in% c("fibroblasts", "macrophages")) {
     seu_obj$seurat_clusters <- Idents(seu_obj)
   }
 
-  seu_obj$Detailed_Label <- factor(paste0("Cluster_", seu_obj$seurat_clusters))
+  seu_obj$Detailed_Label <- factor(paste0(tools::toTitleCase(opt$celltype), "_", seu_obj$seurat_clusters))
   Idents(seu_obj) <- "Detailed_Label"
 
   active_order  <- levels(seu_obj$Detailed_Label)

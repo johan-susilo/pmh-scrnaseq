@@ -197,11 +197,7 @@ reducedDims(cds)[["UMAP"]] <- TN.subset[["umap"]]@cell.embeddings
 # 2. Force the exact detailed text labels as the Monocle3 clusters
 cds@clusters$UMAP$clusters <- as.factor(TN.subset$Detailed_Label)
 
-# 3. Force a single partition (This prevents broken/disconnected graphs)
-recreate_partition <- c(rep(1, length(cds@clusters$UMAP$clusters)))
-names(recreate_partition) <- names(cds@clusters$UMAP$clusters)
-recreate_partition <- as.factor(recreate_partition)
-cds@clusters$UMAP$partitions <- recreate_partition
+cds@clusters$UMAP$partitions <- cds@clusters$UMAP$clusters
 
 # ==============================================================================
 # Learning the Trajectory Graph
@@ -210,7 +206,7 @@ message("\nLearning trajectory graph on imported UMAP...")
 
 # Run learn_graph directly on the imported Seurat layout
 set.seed(opt$seed)
-cds <- learn_graph(cds, use_partition = FALSE)
+cds <- learn_graph(cds, use_partition = TRUE)
 
 message("Plotting trajectory...")
 p_trajectory <- plot_cells(cds,

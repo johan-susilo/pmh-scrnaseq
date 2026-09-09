@@ -1,27 +1,5 @@
 #!/usr/bin/env Rscript
-# Pairwise CellChat cross-talk analysis between any two detailed-annotated celltypes.
-#
-# FIX vs original cellchat_analysis.R: group membership for the "who signals
-# to whom" plots used to be inferred by grepping label prefixes ("^F" for
-# fibroblast, "^M" for macrophage), which only worked because those two
-# specific dictionaries happen to produce F*/M*-prefixed Detailed_Label
-# values. Any other celltype pair (e.g. Mast <-> keratinocyte) uses
-# "Cluster_0", "Cluster_1", ... labels that match neither prefix, so the old
-# script would silently produce empty group vectors and blank/erroring plots.
-#
-# Now group membership is taken directly from which input object a cell came
-# from (recorded before the merge), and the "disease-focused" plots use the
-# generic `Condition` metadata column (== "PMH") instead of grepping the
-# word "Disease" out of fibroblast-specific label text.
-#
-# Requires the `cellchat` mamba/conda environment (kept separate from
-# seurat_env due to CellChat's Matrix/igraph version pinning).
-#
-# Usage:
-#   Rscript 08_cellchat_analysis.R \
-#     --obj1 results/03_subsets/fibroblast/processed/fibroblast_detailed_annotated.rds --type1 fibroblast \
-#     --obj2 results/03_subsets/macrophage/processed/macrophage_detailed_annotated.rds --type2 macrophage \
-#     --outdir results/04_cellchat/fibroblast_macrophage
+# Unified Dynamic Multi-way CellChat cross-talk analysis for Global and Sub-cluster conditions.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -29,251 +7,278 @@ suppressPackageStartupMessages({
   library(CellChat)
   library(patchwork)
   library(ggplot2)
+  library(dplyr)
+  library(stringr)
+  library(circlize)
+  library(RColorBrewer)
+  library(ComplexHeatmap)
 })
-
 source("workflow/scripts/00_utils.R")
 
 # ==============================================================================
 # 1. SETUP COMMAND LINE ARGUMENTS
 # ==============================================================================
 option_list <- list(
-  make_option(c("--basedir"), type = "character", default = "results/03_subsets",
-              help = "Base dir shared with 03/04 (default: results/03_subsets). Used to auto-derive --obj1/--obj2 from --type1/--type2 if those aren't given explicitly."),
-  make_option(c("--obj1"), type = "character", default = NULL, help = "Path to first celltype's *_detailed_annotated.rds [default: <basedir>/<type1>/processed/<type1>_detailed_annotated.rds]"),
-  make_option(c("--type1"), type = "character", help = "Short name for the first celltype (used for prefixes/labels, e.g. 'fibroblast')"),
-  make_option(c("--obj2"), type = "character", default = NULL, help = "Path to second celltype's *_detailed_annotated.rds [default: <basedir>/<type2>/processed/<type2>_detailed_annotated.rds]"),
-  make_option(c("--type2"), type = "character", help = "Short name for the second celltype (e.g. 'macrophage')"),
-  make_option(c("--outdir"), type = "character", default = NULL, help = "Output directory [default: results/04_cellchat/<type1>_<type2>]"),
-  make_option(c("--config"), type = "character", default = "config/config.yaml", help = "Path to config.yaml"),
-  make_option(c("--min_cells"), type = "integer", default = NULL, help = "Minimum number of cells required per group [config: cellchat.min_cells]"),
-  make_option(c("--pval_thresh"), type = "numeric", default = NULL, help = "P-value threshold for significant interactions [config: cellchat.pval_thresh]"),
-  make_option(c("--seed"), type = "integer", default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
+  make_option(c("--basedir"), type = "character", default = "results/03_subsets"),
+  make_option(c("--celltypes"), type = "character", help = "Comma-separated list of cell types OR 'Global'"),
+  make_option(c("--global_input"), type = "character", help = "Path to global annotated RDS (if celltypes == 'Global')"),
+  make_option(c("--outdir"), type = "character", help = "Output directory"),
+  make_option(c("--min_cells"), type = "integer", default = 10),
+  make_option(c("--pval_thresh"), type = "numeric", default = 0.05),
+  make_option(c("--seed"), type = "integer", default = 42)
 )
 opt <- parse_args(OptionParser(option_list = option_list))
-cfg <- get_config(opt$config)
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
-opt$min_cells   <- opt$min_cells   %||% cfg_get(cfg, "cellchat", "min_cells",   default = 10)
-opt$pval_thresh <- opt$pval_thresh %||% cfg_get(cfg, "cellchat", "pval_thresh", default = 0.05)
-opt$seed        <- opt$seed        %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
-
-if (is.null(opt$type1) || is.null(opt$type2)) {
-  stop("Missing required arguments: --type1, --type2")
-}
-
-# Auto-derive obj1/obj2/outdir from the shared 03_subsets convention if not
-# given explicitly, so a caller only needs to name the two celltypes.
-opt$obj1   <- opt$obj1   %||% file.path(opt$basedir, opt$type1, "00_data", paste0(opt$type1, "_detailed_annotated.rds"))
-opt$obj2   <- opt$obj2   %||% file.path(opt$basedir, opt$type2, "00_data", paste0(opt$type2, "_detailed_annotated.rds"))
-opt$outdir <- opt$outdir %||% file.path("results", "04_cellchat", paste0(opt$type1, "_", opt$type2))
-
-if (!file.exists(opt$obj1)) stop("--obj1 not found: ", opt$obj1, " (did 04_detail_annotation.R run for '", opt$type1, "'?)")
-if (!file.exists(opt$obj2)) stop("--obj2 not found: ", opt$obj2, " (did 04_detail_annotation.R run for '", opt$type2, "'?)")
 
 dir.create(opt$outdir, recursive = TRUE, showWarnings = FALSE)
 
-# Short, filesystem/barcode-safe prefixes for disambiguating cell IDs after merge
-prefix1 <- toupper(substr(opt$type1, 1, 4))
-prefix2 <- toupper(substr(opt$type2, 1, 4))
-if (prefix1 == prefix2) {
-  # guard against two celltypes sharing the same 4-letter prefix
-  prefix1 <- paste0(prefix1, "1")
-  prefix2 <- paste0(prefix2, "2")
-}
-
 # ==============================================================================
-# 2. LOAD OBJECTS
+# 2. CONDITIONAL LOAD: GLOBAL VS DETAILED SUBSETS
 # ==============================================================================
-message(sprintf("Loading objects for %s and %s...", opt$type1, opt$type2))
-obj1 <- readRDS(opt$obj1)
-obj2 <- readRDS(opt$obj2)
-
-for (nm in c("obj1", "obj2")) {
-  o <- get(nm)
-  if (!"Detailed_Label" %in% colnames(o@meta.data)) {
-    stop(sprintf("ERROR: %s object is missing 'Detailed_Label'. Use the file ending in '_detailed_annotated.rds'.", nm))
-  }
-  if (!"Condition" %in% colnames(o@meta.data)) {
-    stop(sprintf("ERROR: %s object is missing 'Condition'. Re-run 03_subset_clusters.R / 04_detail_annotation.R.", nm))
-  }
-}
-
-# ==============================================================================
-# 3. SEURAT V5-NATIVE DATA EXTRACTION & MERGE
-# ==============================================================================
-message("Extracting raw data to build a clean combined object...")
-
-safe_extract_counts <- function(seu) {
-  assay_use <- ifelse("RNA" %in% Assays(seu), "RNA", DefaultAssay(seu))
-  if (inherits(seu[[assay_use]], "Assay5")) {
-    try({ seu <- JoinLayers(seu) }, silent = TRUE)
-  }
-  mat <- tryCatch({
-    GetAssayData(seu, assay = assay_use, layer = "counts")
-  }, error = function(e) {
-    GetAssayData(seu, assay = assay_use, slot = "counts")
-  })
-  return(mat)
-}
-
-counts_1 <- safe_extract_counts(obj1)
-counts_2 <- safe_extract_counts(obj2)
-
-colnames(counts_1) <- paste0(prefix1, "_", colnames(counts_1))
-colnames(counts_2) <- paste0(prefix2, "_", colnames(counts_2))
-
-common_genes <- intersect(rownames(counts_1), rownames(counts_2))
-if (length(common_genes) == 0) {
-  stop("No common genes found between the two objects - cannot build a combined matrix.")
-}
-counts_1 <- counts_1[common_genes, ]
-counts_2 <- counts_2[common_genes, ]
-combined_counts <- cbind(counts_1, counts_2)
-
-meta_1 <- obj1@meta.data
-meta_2 <- obj2@meta.data
-rownames(meta_1) <- paste0(prefix1, "_", rownames(meta_1))
-rownames(meta_2) <- paste0(prefix2, "_", rownames(meta_2))
-
-cols_to_keep <- c("orig.ident1", "orig.ident2", "Condition", "Detailed_Label")
-cols_to_keep <- intersect(cols_to_keep, intersect(colnames(meta_1), colnames(meta_2)))
-meta_1 <- meta_1[, cols_to_keep, drop = FALSE]
-meta_2 <- meta_2[, cols_to_keep, drop = FALSE]
-
-# Track which input object each cell came from - this replaces the old
-# label-prefix grepping ("^F"/"^M") as the source of truth for group
-# membership, so it works regardless of what the Detailed_Label values
-# actually look like (dictionary-based names, "Cluster_N" fallback, etc.)
-meta_1$source_celltype <- opt$type1
-meta_2$source_celltype <- opt$type2
-
-combined_meta <- rbind(meta_1, meta_2)
-
-message("Building new combined Seurat object...")
-combined <- CreateSeuratObject(counts = combined_counts, meta.data = combined_meta)
-combined <- NormalizeData(combined, verbose = FALSE)
-
-Idents(combined) <- "Detailed_Label"
-
-rm(obj1, obj2, counts_1, counts_2)
-gc()
-
-# ==============================================================================
-# 4. CELLCHAT WORKFLOW (BYPASSING INTERNAL BUGS)
-# ==============================================================================
-message("Initializing CellChat (bypassing Seurat v5 internal conflicts)...")
-set.seed(opt$seed)
-
-data.input <- tryCatch({
-  GetAssayData(combined, assay = "RNA", layer = "data")
-}, error = function(e) {
-  GetAssayData(combined, assay = "RNA", slot = "data")
-})
-meta.data <- combined@meta.data
-
-cellchat <- createCellChat(object = data.input, meta = meta.data, group.by = "Detailed_Label")
-
-cellchat@DB <- CellChatDB.human
-CellChatDB.use <- subsetDB(CellChatDB.human, search = "Secreted Signaling")
-cellchat@DB <- CellChatDB.use
-
-message("Computing probabilities (this takes time)...")
-cellchat <- subsetData(cellchat)
-cellchat <- identifyOverExpressedGenes(cellchat)
-cellchat <- identifyOverExpressedInteractions(cellchat)
-cellchat <- computeCommunProb(cellchat)
-cellchat <- filterCommunication(cellchat, min.cells = opt$min_cells)
-cellchat <- computeCommunProbPathway(cellchat)
-cellchat <- aggregateNet(cellchat)
-
-# ==============================================================================
-# 5. VISUALIZATIONS - PMH DISEASE-FOCUSED
-# ==============================================================================
-message("Saving plots to: ", opt$outdir)
-
-# --- Group membership from object identity, not label-prefix grepping ---
-type1_groups <- as.character(unique(combined_meta$Detailed_Label[combined_meta$source_celltype == opt$type1]))
-type2_groups <- as.character(unique(combined_meta$Detailed_Label[combined_meta$source_celltype == opt$type2]))
-
-# --- "Disease" subset from the generic Condition column, not label text ---
-disease_meta <- combined_meta[combined_meta$Condition == "PMH", ]
-type1_disease_groups <- as.character(unique(disease_meta$Detailed_Label[disease_meta$source_celltype == opt$type1]))
-type2_disease_groups <- as.character(unique(disease_meta$Detailed_Label[disease_meta$source_celltype == opt$type2]))
-
-label1 <- tools::toTitleCase(opt$type1)
-label2 <- tools::toTitleCase(opt$type2)
-
-# --- Original broad plots (keep these) ---
-pdf(file.path(opt$outdir, sprintf("%s_to_%s_Crosstalk.pdf", label1, label2)), width = 12, height = 8)
-print(netVisual_bubble(cellchat, sources.use = type1_groups, targets.use = type2_groups) +
-      ggtitle(sprintf("Signals: %s -> %s", label1, label2)))
-dev.off()
-
-pdf(file.path(opt$outdir, sprintf("%s_to_%s_Crosstalk.pdf", label2, label1)), width = 12, height = 8)
-print(netVisual_bubble(cellchat, sources.use = type2_groups, targets.use = type1_groups) +
-      ggtitle(sprintf("Signals: %s -> %s", label2, label1)))
-dev.off()
-
-disease_groups <- c(type1_disease_groups, type2_disease_groups)
-disease_idx <- which(rownames(cellchat@net$count) %in% disease_groups)
-
-if (length(disease_idx) >= 2) {
-  pdf(file.path(opt$outdir, "PMH_Interaction_Network_Circle_Disease.pdf"), width = 10, height = 10)
-  netVisual_circle(
-    cellchat@net$count[disease_idx, disease_idx],
-    weight.scale = TRUE,
-    label.edge   = FALSE,
-    title.name   = "Number of interactions (PMH disease groups only)"
-  )
-  dev.off()
-
-  pdf(file.path(opt$outdir, "PMH_Interaction_Strength_Circle_Disease.pdf"), width = 10, height = 10)
-  netVisual_circle(
-    cellchat@net$weight[disease_idx, disease_idx],
-    weight.scale = TRUE,
-    label.edge   = FALSE,
-    title.name   = "Interaction strength (PMH disease groups only)"
-  )
-  dev.off()
+if (opt$celltypes == "Global") {
+  message("Loading Global Annotated Object: ", opt$global_input)
+  combined <- readRDS(opt$global_input)
+  
+  # Set identity for global object
+  combined$Detailed_Label <- factor(as.character(combined$cell_type_short))
+  Idents(combined) <- "Detailed_Label"
+  
 } else {
-  message("   - SKIPPING disease-only circle plots: fewer than 2 disease-associated groups found.")
+  types <- trimws(unlist(strsplit(opt$celltypes, ",")))
+  if (length(types) < 2) stop("You must specify at least 2 cell types for detailed CellChat.")
+  message("Loading subset objects for: ", paste(types, collapse = ", "))
+  
+  obj_list <- list()
+  for (i in seq_along(types)) {
+    ctype <- types[i]
+    rds_path <- file.path(opt$basedir, ctype, "00_data", paste0(ctype, "_detailed_annotated.rds"))
+    if (!file.exists(rds_path)) stop("Missing RDS for ", ctype)
+    
+    obj <- readRDS(rds_path)
+    assay_use <- ifelse("RNA" %in% Assays(obj), "RNA", DefaultAssay(obj))
+    if (inherits(obj[[assay_use]], "Assay5")) try({ obj <- JoinLayers(obj) }, silent = TRUE)
+    
+    mat <- tryCatch(GetAssayData(obj, assay = assay_use, layer = "counts"), 
+                    error = function(e) GetAssayData(obj, assay = assay_use, slot = "counts"))
+    
+    prefix <- paste0(toupper(substr(ctype, 1, 4)), i, "_")
+    colnames(mat) <- paste0(prefix, colnames(mat))
+    
+    meta <- obj@meta.data[, intersect(c("orig.ident1", "orig.ident2", "Condition", "Detailed_Label"), colnames(obj@meta.data)), drop = FALSE]
+    rownames(meta) <- paste0(prefix, rownames(meta))
+    meta$source_celltype <- ctype
+    
+    obj_list[[ctype]] <- list(mat = mat, meta = meta)
+  }
+
+  common_genes <- Reduce(intersect, lapply(obj_list, function(x) rownames(x$mat)))
+  combined_counts <- do.call(cbind, lapply(obj_list, function(x) x$mat[common_genes, ]))
+  combined_meta <- do.call(rbind, lapply(obj_list, function(x) x$meta))
+
+  message("Building new multi-way Seurat object...")
+  combined <- CreateSeuratObject(counts = combined_counts, meta.data = combined_meta)
+  combined <- NormalizeData(combined, verbose = FALSE)
+
+  # Clean and collapse fragmented labels
+  clean_labels <- function(x) {
+    x <- str_replace_all(x, "^T_cells(_.*)?$|^T Cells(_.*)?$", "T cells")
+    x <- str_replace_all(x, "^Mast_cells(_.*)?$|^Mast Cells(_.*)?$", "Mast cells")
+    x <- str_replace_all(x, "^Melanocytes(_.*)?$", "Melanocytes")
+    x <- str_replace_all(x, "^Keratinocytes(_.*)?$", "Keratinocytes")
+    x <- str_replace_all(x, "^Endothelial_cells(_.*)?$", "Endothelial cells")
+    return(x)
+  }
+
+  combined$Detailed_Label <- clean_labels(as.character(combined$Detailed_Label))
+  combined$Detailed_Label <- factor(combined$Detailed_Label)
+  Idents(combined) <- "Detailed_Label"
+  
+  rm(obj_list, combined_counts)
+  gc()
 }
 
-# --- PMH disease-focused plots (disease-condition clusters only, significant only) ---
-if (length(type1_disease_groups) > 0 && length(type2_groups) > 0) {
-  pdf(file.path(opt$outdir, sprintf("PMH_%s_Disease_to_%s.pdf", label1, label2)), width = 12, height = 8)
-  print(netVisual_bubble(cellchat,
-        sources.use  = type1_disease_groups,
-        targets.use  = type2_groups,
-        remove.isolate = TRUE,
-        thresh = opt$pval_thresh) +
-        ggtitle(sprintf("PMH: Disease %s -> %s", label1, label2)))
+# ==============================================================================
+# 3. PLOTTING HELPER FUNCTIONS
+# ==============================================================================
+generate_chord_plot <- function(interaction_df, out_pdf, plot_title) {
+  if (nrow(interaction_df) == 0) return(NULL)
+  
+  interaction_df <- interaction_df %>%
+    mutate(source_group = as.character(source), target_group = as.character(target)) %>%
+    filter(!is.na(prob), prob > 0, is.na(pval) | pval <= 0.05)
+  
+  cell_network <- interaction_df %>%
+    group_by(source_group, target_group) %>%
+    summarise(interaction_strength = sum(prob, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(interaction_strength))
+    
+  if(nrow(cell_network) == 0) return(NULL)
+  
+  cell_network_plot <- cell_network %>% slice_max(order_by = interaction_strength, n = 40, with_ties = FALSE)
+  cell_groups <- sort(unique(c(cell_network_plot$source_group, cell_network_plot$target_group)))
+  
+  chord_matrix <- matrix(0, nrow = length(cell_groups), ncol = length(cell_groups), dimnames = list(cell_groups, cell_groups))
+  for (i in seq_len(nrow(cell_network_plot))) {
+    src <- as.character(cell_network_plot$source_group[i])
+    tgt <- as.character(cell_network_plot$target_group[i])
+    chord_matrix[src, tgt] <- cell_network_plot$interaction_strength[i]
+  }
+  
+  # Merged color palette supporting both Global and Detailed clusters
+  base_colors <- c(
+    "T cells" = "#A8D9D6", "Mast cells" = "#C43D73", "Melanocytes" = "#1A1029",
+    "Keratinocytes" = "#70AAA9", "Endothelial cells" = "#246A73", "Epithelial cells" = "#86af4d",
+    "Fibroblasts" = "#F2542D", "Macrophages" = "#F6AE2D",
+    "M_Homeostatic_Resident" = "#0072B2", "M_Chronic_GvHD_Inflammatory" = "#E69F00",
+    "F1_Superficial" = "#146B78", "F3_FRC_like" = "#70AAA9", "F4_DS_DPEP1" = "#82B8B7",
+    "F4_DP_HHIP" = "#A8D9D6", "F5_NGFR" = "#5FAF8D", "F6_Inflammatory_Myofibroblast" = "#E85D3F"
+  )
+  
+  missing_groups <- setdiff(cell_groups, names(base_colors))
+  if (length(missing_groups) > 0) {
+    extra_colors <- rep(brewer.pal(max(3, min(8, length(missing_groups))), "Set3"), length.out = length(missing_groups))
+    names(extra_colors) <- missing_groups
+    base_colors <- c(base_colors, extra_colors)
+  }
+  grid_colors <- base_colors[cell_groups]
+  
+  min_strength <- min(cell_network_plot$interaction_strength)
+  max_strength <- max(cell_network_plot$interaction_strength)
+  if (min_strength == max_strength) max_strength <- min_strength + 0.01 
+  
+  link_color_func <- colorRamp2(breaks = c(min_strength, max_strength), colors = c("#398F8B", "#F37758"))
+  
+  pdf(out_pdf, width = 12, height = 12)
+  circos.clear()
+  circos.par(start.degree = 90, gap.after = rep(6, length(cell_groups)), track.margin = c(0.01, 0.01), cell.padding = c(0.01, 0.01, 0.01, 0.01))
+  
+  chordDiagram(
+    x = chord_matrix, grid.col = grid_colors, col = link_color_func, directional = 1,
+    direction.type = c("arrows", "diffHeight"), link.arr.type = "big.arrow", link.sort = TRUE,
+    link.largest.ontop = TRUE, transparency = 0.3, annotationTrack = c("grid", "name"),
+    preAllocateTracks = list(track.height = 0.08)
+  )
+  title(plot_title, cex.main = 1.6)
+  
+  lgd <- Legend(col_fun = link_color_func, title = "Interaction\nStrength", direction = "horizontal")
+  draw(lgd, x = unit(0.5, "npc"), y = unit(0.05, "npc"), just = c("center", "bottom"))
+  circos.clear()
   dev.off()
 }
 
-if (length(type2_groups) > 0 && length(type1_disease_groups) > 0) {
-  pdf(file.path(opt$outdir, sprintf("PMH_%s_to_%s_Disease.pdf", label2, label1)), width = 12, height = 8)
-  print(netVisual_bubble(cellchat,
-        sources.use  = type2_groups,
-        targets.use  = type1_disease_groups,
-        remove.isolate = TRUE,
-        thresh = opt$pval_thresh) +
-        ggtitle(sprintf("PMH: %s -> Disease %s", label2, label1)))
-  dev.off()
+save_dynamic_bubble <- function(cellchat_obj, sources, targets, out_path, plot_title) {
+  tryCatch({
+    p <- netVisual_bubble(cellchat_obj, sources.use = sources, targets.use = targets, remove.isolate = TRUE, thresh = opt$pval_thresh)
+    if (is.null(p)) return(NULL)
+    
+    p <- p + ggtitle(plot_title) + 
+         theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 12),
+               plot.margin = margin(t = 20, r = 20, b = 60, l = 20))
+    
+    n_pairs <- length(unique(p$data$source.target))
+    n_pathways <- length(unique(p$data$interaction_name_2))
+    if (is.null(n_pairs) || n_pairs == 0) n_pairs <- 10
+    if (is.null(n_pathways) || n_pathways == 0) n_pathways <- 20
+    
+    dyn_width <- max(10, n_pairs * 0.5 + 4)
+    dyn_height <- max(8, n_pathways * 0.25 + 6) 
+    
+    pdf(out_path, width = dyn_width, height = dyn_height)
+    print(p)
+    dev.off()
+  }, error = function(e) message("Skipping bubble plot ", basename(out_path), ": ", e$message))
 }
 
-# --- Top interactions table ---
-df_1_to_2 <- subsetCommunication(cellchat,
-  sources.use = type1_disease_groups,
-  targets.use = type2_groups,
-  thresh = opt$pval_thresh)
-df_2_to_1 <- subsetCommunication(cellchat,
-  sources.use = type2_groups,
-  targets.use = type1_disease_groups,
-  thresh = opt$pval_thresh)
+# ==============================================================================
+# 4. CORE CELLCHAT MATH & WORKFLOW ENGINE
+# ==============================================================================
+run_cellchat_workflow <- function(seu_obj, condition_name, outdir_base) {
+  message(sprintf("\n=== Running CellChat Workflow for Condition: %s ===", condition_name))
+  
+  seu_obj$Detailed_Label <- droplevels(factor(seu_obj$Detailed_Label))
+  
+  if (ncol(seu_obj) < opt$min_cells) {
+    message("Not enough cells to run CellChat for ", condition_name)
+    return(NULL)
+  }
 
-write.csv(df_1_to_2, file.path(opt$outdir, sprintf("PMH_%sDisease_to_%s_interactions.csv", label1, label2)), row.names = FALSE)
-write.csv(df_2_to_1, file.path(opt$outdir, sprintf("PMH_%s_to_%sDisease_interactions.csv", label2, label1)), row.names = FALSE)
+  set.seed(opt$seed)
+  data.input <- tryCatch(GetAssayData(seu_obj, assay = "RNA", layer = "data"), 
+                         error = function(e) GetAssayData(seu_obj, assay = "RNA", slot = "data"))
 
-saveRDS(cellchat, file.path(opt$outdir, sprintf("%s_%s_cellchat.rds", opt$type1, opt$type2)))
-message("Analysis Complete!")
+  cc <- createCellChat(object = data.input, meta = seu_obj@meta.data, group.by = "Detailed_Label")
+  cc@DB <- subsetDB(CellChatDB.human, search = "Secreted Signaling")
+
+  message("Computing probabilities...")
+  cc <- subsetData(cc)
+  cc <- identifyOverExpressedGenes(cc)
+  cc <- identifyOverExpressedInteractions(cc)
+  cc <- computeCommunProb(cc)
+  cc <- filterCommunication(cc, min.cells = opt$min_cells)
+  cc <- computeCommunProbPathway(cc)
+  cc <- aggregateNet(cc)
+
+  # Map condition to filename prefix
+  if (condition_name == "AllCells") {
+    pfx <- "Global"
+  } else if (condition_name == "PMH") {
+    pfx <- "PMH_Only"
+  } else if (condition_name == "Healthy") {
+    pfx <- "Healthy_Only"
+  } else {
+    pfx <- condition_name
+  }
+
+  df <- subsetCommunication(cc, thresh = opt$pval_thresh)
+  write.csv(df, file.path(outdir_base, sprintf("Table_Interactions_%s.csv", pfx)), row.names = FALSE)
+  generate_chord_plot(df, file.path(outdir_base, sprintf("Chord_Diagram_%s.pdf", pfx)), sprintf("Cell-Cell Communication (%s)", condition_name))
+
+  pdf(file.path(outdir_base, sprintf("Network_Circle_%s.pdf", pfx)), width = 12, height = 12)
+  netVisual_circle(cc@net$count, weight.scale = TRUE, label.edge = FALSE, title.name = sprintf("Total Interactions (%s)", condition_name))
+  dev.off()
+
+  # Only generate dynamic sender/receiver bubble plots for the subset networks, not global macro
+  if (opt$celltypes != "Global") {
+    message("Generating dynamic bubble plots...")
+    types <- trimws(unlist(strsplit(opt$celltypes, ",")))
+    for (sender in types) {
+      sender_label <- tools::toTitleCase(sender)
+      sender_clusters <- as.character(unique(seu_obj$Detailed_Label[seu_obj$source_celltype == sender]))
+      receiver_clusters <- as.character(unique(seu_obj$Detailed_Label[seu_obj$source_celltype != sender]))
+      
+      if (length(sender_clusters) > 0 && length(receiver_clusters) > 0) {
+        save_dynamic_bubble(cc, sender_clusters, receiver_clusters, 
+                            file.path(outdir_base, sprintf("Bubble_%s_%s_to_Others.pdf", pfx, sender_label)), 
+                            sprintf("%s Signals: %s -> All Others", condition_name, sender_label))
+      }
+    }
+  }
+
+  rds_name <- ifelse(condition_name == "AllCells", "multiway_cellchat.rds", sprintf("multiway_cellchat_%s.rds", pfx))
+  saveRDS(cc, file.path(outdir_base, rds_name))
+  
+  return(cc)
+}
+
+# ==============================================================================
+# 5. EXECUTE THE WORKFLOW
+# ==============================================================================
+# 1. Run All Cells (Healthy + PMH)
+cc_global <- run_cellchat_workflow(combined, "AllCells", opt$outdir)
+
+if ("Condition" %in% colnames(combined@meta.data)) {
+  
+  # 2. Run PMH Cells Only
+  combined_pmh <- subset(combined, Condition == "PMH")
+  if (ncol(combined_pmh) > 0) {
+    cc_pmh <- run_cellchat_workflow(combined_pmh, "PMH", opt$outdir)
+  }
+  
+  # 3. Run Healthy Cells Only (Ensure "Healthy" matches your metadata exactly)
+  combined_healthy <- subset(combined, Condition == "Healthy")
+  if (ncol(combined_healthy) > 0) {
+    cc_healthy <- run_cellchat_workflow(combined_healthy, "Healthy", opt$outdir)
+  }
+  
+}
+
+message("\nUnified CellChat Analysis Complete!")

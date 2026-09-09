@@ -20,7 +20,6 @@ reproducibility:
 clinical_groups:
   Healthy:
     - "HTY131"
-    - "UA258"
 
 
   PMH:
@@ -76,6 +75,10 @@ pathway:
   logfc_cutoff: 0.5
   pval_cutoff: 0.05
 
+trajectory:
+  # The precise name of the root cluster (e.g., "F2_Universal_Reticular"). 
+  # Use "NULL" to let the script auto-detect the cluster with the highest "Healthy" proportion.
+  root_state: "NULL"
 
 # ------------------------------------------------------------------------------
 # 6. Pipeline Parameters: CellChat (08_cellchat_analysis.R)
@@ -87,4 +90,4 @@ cellchat:
   min_cells: 10
   pval_thresh: 0.05
   networks:
-    - ["macrophages", "mast_cells", "fibroblasts", "t_cells"]
+    - ["macrophages", "mast_cells", "fibroblasts"]

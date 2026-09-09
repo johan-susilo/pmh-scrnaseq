@@ -21,6 +21,9 @@ clinical_groups:
   Healthy:
     - "HTY131"
     - "UA258"
+    - "HTY2901"
+    - "HTY3080"
+    - "HTY3106"
 
 
   PMH:
@@ -53,7 +56,6 @@ subsetting:
     - "keratinocytes"
     - "melanocytes"
     - "t_cells"
-    - "endothelial_cells"
   
   pcs: 20             # Extracted from hardcoded pcs_to_use
   resolutions: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2]
@@ -76,6 +78,10 @@ pathway:
   logfc_cutoff: 0.5
   pval_cutoff: 0.05
 
+trajectory:
+  # The precise name of the root cluster (e.g., "F2_Universal_Reticular"). 
+  # Use "NULL" to let the script auto-detect the cluster with the highest "Healthy" proportion.
+  root_state: "NULL"
 
 # ------------------------------------------------------------------------------
 # 6. Pipeline Parameters: CellChat (08_cellchat_analysis.R)
@@ -84,7 +90,7 @@ pathway:
 # type1/type2 must match folder names under 03_subsets (i.e. entries in
 # subsetting.celltypes above) and both must have a *_detailed_annotated.rds.
 cellchat:
-  min_cells: 10
-  pval_thresh: 0.05
-  networks:
-    - ["macrophages", "mast_cells", "fibroblasts", "t_cells"]
+  min_cells: 10       # Extracted from filterCommunication
+  pval_thresh: 0.05   # Extracted from subsetCommunication
+  pairs:
+    - ["fibroblasts", "macrophages"]
