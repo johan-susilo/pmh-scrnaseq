@@ -156,7 +156,7 @@ try_join_layers <- function(obj) {
 # 6. CANONICAL OUTPUT PATH LAYOUT (same shape used by 01/02/03/04)
 #
 #    <01-out>/{processed,plots,tables,logs}/
-#    <01-out>/TN.combined_dim30.rds, TN.combined_dim30_full.rds
+#    <01-out>/TN.combined.rds, TN.combined_full.rds
 #      (<01-out> is whatever -o the 01_preprocessing.R rule is given, e.g.
 #       results/01_preprocessing -- used AS-IS, no extra nesting)
 #

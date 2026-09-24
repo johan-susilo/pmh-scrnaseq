@@ -4,15 +4,15 @@
 # Steps:
 #   read_csv   – parse input.csv and cache samples_df.rds
 #   process    – QC, doublet removal, per-sample normalisation  (parallel across samples)
-#   integrate  - merge + Harmony integration + multi-res clustering -> TN.combined_dim30.rds
+#   integrate  - merge + Harmony integration + multi-res clustering -> TN.combined.rds
 #   plot       – UMAP / heatmap / proportion plots (uses numeric cluster labels)
 #   all        – read_csv -> process -> integrate -> plot
 #
 # Annotation is handled by 02_global_annotation.R, which reads
-# TN.combined_dim30.rds, applies consensus labels, and writes TN.combined_annotated.rds.
+# TN.combined.rds, applies consensus labels, and writes TN.combined_annotated.rds.
 #
 # CONTRACT WITH 02: this script must always produce
-#   <outdir>/TN.combined_dim30.rds  (<outdir> = whatever -o this rule is given, used as-is)
+#   <outdir>/TN.combined.rds  (<outdir> = whatever -o this rule is given, used as-is)
 # with clustering columns named "<assay>_snn_res.<r>" for every resolution in
 # preprocessing.resolution / the --resolution flag, resolvable via
 # resolve_res_col() in 00_utils.R.
@@ -37,13 +37,11 @@ suppressPackageStartupMessages({
   library(stringr)
   library(patchwork)
   library(scales)
-  library(parallel)
   library(harmony)
   library(clustree)
 })
 
 source("workflow/scripts/00_utils.R")
-RNGkind("L'Ecuyer-CMRG")
 options(future.globals.maxSize = 100 * 1024^3)
 
 # DoubletFinder inadvertently passes a 1-column data frame to order().
@@ -51,16 +49,6 @@ options(future.globals.maxSize = 100 * 1024^3)
 xtfrm.data.frame <- function(x) {
   if (ncol(x) == 1) return(xtfrm(x[[1]]))
   stop("cannot xtfrm data frames")
-}
-
-if (!exists("cc.genes")) {
-  tryCatch({
-    utils::data("cc.genes", package = "Seurat")
-    message("Loaded cc.genes from Seurat")
-  }, error = function(e) {
-    message("Warning: cc.genes unavailable: ", conditionMessage(e))
-    cc.genes <<- list(s.genes = character(0), g2m.genes = character(0))
-  })
 }
 
 # ==============================================================================
@@ -84,46 +72,76 @@ option_list <- list(
   make_option("--max_mt",              type = "numeric",   default = NULL, help = "Max mitochondrial % [config: preprocessing.max_mt]"),
   make_option("--use_sct",             type = "logical",   default = NULL, help = "Use SCTransform normalization [config: preprocessing.use_sct]"),
   make_option("--batch_var",           type = "character", default = NULL, help = "Batch variable for Harmony [config: preprocessing.batch_var]"),
-  make_option(c("--pcs_local"),        type = "integer",   default = NULL, help = "PCs for per-sample normalization [config: preprocessing.pcs_local]"),
-  make_option(c("--pcs_global"),       type = "integer",   default = NULL, help = "PCs for global integration [config: preprocessing.pcs_global]"),
-  make_option(c("--seed"),             type = "integer",   default = NULL, help = "Global random seed [config: reproducibility.random_seed]")
+  
+  # decoupled PCA settings
+  make_option(c("--npcs_local"),       type = "integer",   default = NULL, help = "Number of PCs to calculate for each sample [config: preprocessing.npcs_local]"),
+  make_option(c("--dims_local"),       type = "integer",   default = NULL, help = "Number of local PCs to use for neighbors and UMAP [config: preprocessing.dims_local]"),
+  make_option(c("--npcs_global"),      type = "integer",   default = NULL, help = "Number of PCs to calculate for the combined dataset [config: preprocessing.npcs_global]"),
+  make_option(c("--dims_global"),      type = "integer",   default = NULL, help = "Number of Harmony dimensions to use for global neighbors and UMAP [config: preprocessing.dims_global]"),
+  make_option(c("--dims_doubletfinder"),type = "integer",  default = NULL, help = "Number of PCs to use for DoubletFinder [config: preprocessing.dims_doubletfinder]"),
+  
+  make_option(c("--seed"),             type = "integer",   default = NULL, help = "Global random seed [config: reproducibility.random_seed]"),
+  make_option("--sample_name",         type = "character", default = NULL, help = "Single sample name for parallel processing")
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
 cfg <- get_config(opt$config)
 
-# ---- RESOLVE DEFAULTS: config.yaml first, CLI flag overrides if supplied ----
+# ---- 1. Group config defaults into a single readable list ----
+config_defaults <- list(
+  resolution         = cfg_get(cfg, "preprocessing", "resolution",         default = 0.2),
+  doublet_rate       = cfg_get(cfg, "preprocessing", "doublet_rate",       default = 0.08),
+  min_features       = cfg_get(cfg, "preprocessing", "min_features",       default = 200),
+  max_features       = cfg_get(cfg, "preprocessing", "max_features",       default = 5000),
+  max_mt             = cfg_get(cfg, "preprocessing", "max_mt",             default = 30),
+  use_sct            = cfg_get(cfg, "preprocessing", "use_sct",            default = TRUE),
+  batch_var          = cfg_get(cfg, "preprocessing", "batch_var",          default = "orig.ident2"),
+  npcs_local         = cfg_get(cfg, "preprocessing", "npcs_local",         default = 50),
+  dims_local         = cfg_get(cfg, "preprocessing", "dims_local",         default = 30),
+  npcs_global        = cfg_get(cfg, "preprocessing", "npcs_global",        default = 50),
+  dims_global        = cfg_get(cfg, "preprocessing", "dims_global",        default = 30),
+  dims_doubletfinder = cfg_get(cfg, "preprocessing", "dims_doubletfinder", default = 20),
+  seed               = cfg_get(cfg, "reproducibility", "random_seed",      default = 42),
+  file               = cfg_get(cfg, "input_csv",                           default = NULL)
+)
+
+# ---- 2. Graceful Resolution (CLI > Config.yaml > Default) ----
+# Loop through the defaults: if the CLI option is missing (NULL), fill it with the config value.
+for (param in names(config_defaults)) {
+  if (is.null(opt[[param]])) {
+    opt[[param]] <- config_defaults[[param]]
+  }
+}
+
+# 3. Add the single dynamic runtime fallback
 `%||%` <- function(a, b) if (is.null(a)) b else a
-opt$resolution    <- opt$resolution    %||% cfg_get(cfg, "preprocessing", "resolution",    default = 0.2)
-opt$doublet_rate  <- opt$doublet_rate  %||% cfg_get(cfg, "preprocessing", "doublet_rate",  default = 0.08)
-opt$min_features  <- opt$min_features  %||% cfg_get(cfg, "preprocessing", "min_features",  default = 200)
-opt$max_features  <- opt$max_features  %||% cfg_get(cfg, "preprocessing", "max_features",  default = 5000)
-opt$max_mt        <- opt$max_mt        %||% cfg_get(cfg, "preprocessing", "max_mt",        default = 30)
-opt$use_sct       <- opt$use_sct       %||% cfg_get(cfg, "preprocessing", "use_sct",       default = TRUE)
-opt$batch_var     <- opt$batch_var     %||% cfg_get(cfg, "preprocessing", "batch_var",     default = "orig.ident2")
-opt$pcs_local     <- opt$pcs_local     %||% cfg_get(cfg, "preprocessing", "pcs_local",     default = 30)
-opt$pcs_global    <- opt$pcs_global    %||% cfg_get(cfg, "preprocessing", "pcs_global",    default = 50)
-opt$seed          <- opt$seed          %||% cfg_get(cfg, "reproducibility", "random_seed", default = 42)
-if (is.null(opt$file)) opt$file <- cfg_get(cfg, "input_csv", default = NULL)
+opt$cores <- opt$cores %||% max(1L, parallel::detectCores(logical = FALSE) - 1L)
+
+# 4. PC validation block
+pc_params <- c(
+  npcs_local         = opt$npcs_local,
+  dims_local         = opt$dims_local,
+  npcs_global        = opt$npcs_global,
+  dims_global        = opt$dims_global,
+  dims_doubletfinder = opt$dims_doubletfinder
+)
+
+if (any(!is.finite(pc_params))) stop("All PC parameters must be finite numbers")
+if (any(pc_params < 2)) stop("All PC parameters must be at least 2")
+if (opt$dims_local > opt$npcs_local) stop("dims_local cannot exceed npcs_local")
+if (opt$dims_global > opt$npcs_global) stop("dims_global cannot exceed npcs_global")
+if (opt$dims_doubletfinder > opt$npcs_local) stop("dims_doubletfinder cannot exceed npcs_local")
 
 res_folder <- paste0("res_", opt$resolution)
 set.seed(opt$seed)
 
 # ==============================================================================
 # OUTPUT DIRECTORIES
-#
-# `-o` is used AS-IS -- no extra subfolder is appended here. The Snakemake
-# rule for this script already points `-o` at a stage-specific directory
-# (e.g. .../01_preprocessing); nesting a second "01_integration" folder
-# underneath that silently breaks the fixed output path the rule's `output:`
-# block expects (this caused a MissingOutputException previously -- see the
-# SHARED FILE PATHS note below for the matching filename fix).
 # ==============================================================================
 
 output_base <- if (!is.null(opt$output) && nzchar(opt$output)) opt$output else "results"
 dir.create(output_base, recursive = TRUE, showWarnings = FALSE)
 output_dirs <- make_stage_dirs(output_base, c("01_per_sample_processed", "02_plots", "03_tables", "logs"))
-# This maps your new neat folders back to the original variables the script expects
 names(output_dirs) <- c("processed", "plots", "tables", "logs")
 
 # ==============================================================================
@@ -135,16 +153,9 @@ message("Parallel sample processing: ", n_cores, " core(s)")
 
 # ==============================================================================
 # SHARED FILE PATHS
-#
-# Kept as TN.combined_dim30.rds / _full.rds -- these are the exact names the
-# Snakefile's `output:` blocks and 02_global_annotation.R's `-i` default
-# expect. "dim30" no longer literally reflects opt$pcs_global (which is now
-# config-driven), but renaming is a coordinated Snakefile + downstream-script
-# change, not something to do silently inside this one file.
 # ==============================================================================
 
-integrated_full_rds <- file.path(output_base, "TN.combined_dim30_full.rds")
-integrated_rds       <- file.path(output_base, "TN.combined_dim30.rds")
+integrated_rds       <- file.path(output_base, "TN.combined.rds")
 
 # ==============================================================================
 # HELPER UTILITIES
@@ -158,11 +169,8 @@ save_qc_violin <- function(seur_obj, sample_id, file_prefix, plot_title) {
   }
   tryCatch({
     p <- create_qc_violin_plot(seur_obj, qc_feats, plot_title)
-    if (!is.null(p)) {
-      pdf(file_prefix, width = 15, height = 5)
-      print(p)
-      dev.off()
-      message("QC violin saved: ", file_prefix)
+      if (!is.null(p)) {
+      save_plot(p, file_prefix, w = 15, h = 5)
     }
   }, error = function(e) {
     message("Warning: QC violin failed for ", sample_id, ": ", conditionMessage(e))
@@ -221,14 +229,14 @@ normalize_and_pca <- function(seur_obj, use_sct) {
     message("Running SCTransform v2...")
     seur_obj <- SCTransform(seur_obj, vars.to.regress = "percent.mt",
                             method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
-    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
+    seur_obj <- RunPCA(seur_obj, assay = "SCT", npcs = opt$npcs_local, seed.use = opt$seed, verbose = FALSE)
   } else {
     message("Running LogNormalize pipeline...")
     seur_obj <- seur_obj %>%
       NormalizeData() %>%
       FindVariableFeatures() %>%
       ScaleData(vars.to.regress = "percent.mt") %>%
-      RunPCA(npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
+      RunPCA(npcs = opt$npcs_local, seed.use = opt$seed, verbose = FALSE)
   }
   seur_obj
 }
@@ -253,17 +261,17 @@ read_samples_csv <- function(csv_file) {
   if (!all(required_cols %in% colnames(samples_df)))
     stop("CSV must contain: ", paste(required_cols, collapse = ", "), call. = FALSE)
 
-  saveRDS(samples_df, file.path(output_base, "samples_df.rds"))
   message("Found ", nrow(samples_df), " samples")
   samples_df
 }
 
 # ==============================================================================
-# STEP 2 — PROCESS ONE SAMPLE  (called inside mclapply)
+# STEP 2 — PROCESS SAMPLE 
 # ==============================================================================
 
 process_sample <- function(sample_name, sample_ident1, sample_ident2,
                            base_data_dir, out_dirs, use_sct, params, seed) {
+                            
   tryCatch({
     output_rds      <- file.path(out_dirs$processed, paste0(sample_name, "_processed.rds"))
     sample_plot_dir <- file.path(out_dirs$plots, sample_name)
@@ -278,9 +286,9 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
           saveRDS(obj, output_rds)
           message("  Backfilled processed_with_sct flag for ", sample_name)
         }
-      }, error = function(e)
+      }, error = function(e) {
         message("Warning: could not update RDS for ", sample_name, ": ", conditionMessage(e))
-      )
+      })
       return(output_rds)
     }
 
@@ -291,7 +299,7 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
       counts       = Read10X(data.dir = file.path(base_data_dir, sample_name)),
       project      = sample_name,
       min.cells    = 3,
-      min.features = 10
+      min.features = params$min_features
     )
     message("Dimensions: ", dim(seur_obj)[1], " features x ", dim(seur_obj)[2], " cells")
     seur_obj[["percent.mt"]] <- PercentageFeatureSet(seur_obj, pattern = "^MT-")
@@ -301,7 +309,10 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
 
     n_before <- ncol(seur_obj)
     seur_obj <- subset(seur_obj,
-                       subset = nFeature_RNA > 200 & nFeature_RNA < 10000 & percent.mt < 50)
+                       subset = nFeature_RNA > params$min_features &
+                                nFeature_RNA < params$max_features &
+                                percent.mt   < params$max_mt)
+
     message("Pre-filter: removed ", n_before - ncol(seur_obj),
             " empty droplets; keeping ", ncol(seur_obj))
 
@@ -309,23 +320,28 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
                    paste0("QC (Pre-filtered) - ", sample_name))
 
     seur_obj <- normalize_and_pca(seur_obj, use_sct)
-    save_plot(ElbowPlot(seur_obj, ndims = opt$pcs_local), plot_path("_03_elbow"))
+    
+    save_plot(ElbowPlot(seur_obj, ndims = opt$npcs_local), plot_path("_03_elbow"))
+
+    local_dims <- seq_len(opt$dims_local)
+    if (max(local_dims) > opt$npcs_local) stop("dims_local cannot exceed npcs_local")
 
     seur_obj <- seur_obj %>%
-      FindNeighbors(dims = 1:opt$pcs_local) %>%
+      FindNeighbors(reduction = "pca", dims = local_dims) %>%
       FindClusters(random.seed = seed) %>%
-      RunUMAP(dims = 1:opt$pcs_local, seed.use = seed, umap.method = "uwot", metric = "cosine")
+      RunUMAP(reduction = "pca", dims = local_dims, seed.use = seed, umap.method = "uwot", metric = "cosine")
+      
     save_plot(DimPlot(seur_obj, reduction = "umap", label = TRUE),
                    plot_path("_04_umap_initial"))
 
     # -- DoubletFinder --
-    # set.seed() here is the fix: paramSweep()/find.pK() previously had no
-    # seed control, so the chosen pK (and therefore which cells get called
-    # doublets, and everything computed downstream of that) could vary
-    # between runs even with opt$seed fixed everywhere else.
     message("Running DoubletFinder pK sweep (seed = ", seed, ")...")
     set.seed(seed)
-    sweep.res <- paramSweep(seur_obj, PCs = 1:20, sct = isTRUE(use_sct))
+
+    df_dims <- seq_len(opt$dims_doubletfinder)
+    if (max(df_dims) > opt$npcs_local) stop("dims_doubletfinder cannot exceed npcs_local")
+
+    sweep.res <- paramSweep(seur_obj, PCs = df_dims, sct = isTRUE(use_sct))
     bcmvn    <- find.pK(summarizeSweep(sweep.res, GT = FALSE))
 
     save_plot(
@@ -342,7 +358,7 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
     message("Optimal pK: ", pK, "  |  Adjusted expected doublets: ", nExp_adj)
 
     set.seed(seed)
-    seur_obj <- doubletFinder(seur_obj, PCs = 1:20, pN = 0.25, pK = pK,
+    seur_obj <- doubletFinder(seur_obj, PCs = df_dims, pN = 0.25, pK = pK,
                               nExp = nExp_adj, sct = isTRUE(use_sct))
 
     DF_col <- grep("DF.classifications", colnames(seur_obj@meta.data), value = TRUE)[1]
@@ -381,17 +397,6 @@ process_sample <- function(sample_name, sample_ident1, sample_ident2,
       seur_obj$Condition <- "Unknown"
       seur_obj$Detailed_Condition <- "Unknown"
     }
-
-    n_before <- ncol(seur_obj)
-    seur_obj <- subset(seur_obj,
-                       subset = nFeature_RNA > params$min_features &
-                                nFeature_RNA < params$max_features &
-                                percent.mt   < params$max_mt)
-    message("Final QC: removed ", n_before - ncol(seur_obj),
-            " cells; keeping ", ncol(seur_obj))
-
-    save_qc_violin(seur_obj, sample_name, plot_path("_09_qc_final"),
-                   paste0("QC (Final) - ", sample_name))
 
     seur_obj@misc$processed_with_sct <- isTRUE(use_sct)
     seur_obj@misc$pipeline_seed      <- seed
@@ -503,28 +508,29 @@ integrate_samples <- function(sample_list, chosen_res) {
     TN.combined <- SCTransform(TN.combined, assay = "RNA", vars.to.regress = vars_reg,
                                method = "glmGamPoi", vst.flavor = "v2", verbose = FALSE)
     TN.combined <- PrepSCTFindMarkers(TN.combined, assay = "SCT", verbose = FALSE)
-    TN.combined <- RunPCA(TN.combined, assay = "SCT", npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
+    TN.combined <- RunPCA(TN.combined, assay = "SCT", npcs = opt$npcs_global, seed.use = opt$seed, verbose = FALSE)
     harmony_assay <- "SCT"
   } else {
     message("Global LogNormalize pipeline...")
     TN.combined <- NormalizeData(TN.combined, verbose = FALSE) %>%
       FindVariableFeatures(nfeatures = 2000, verbose = FALSE) %>%
       ScaleData(vars.to.regress = "percent.mt", features = rownames(TN.combined), verbose = FALSE) %>%
-      RunPCA(npcs = opt$pcs_global, seed.use = opt$seed, verbose = FALSE)
+      RunPCA(npcs = opt$npcs_global, seed.use = opt$seed, verbose = FALSE)
     harmony_assay <- "RNA"
   }
 
-  save_plot(ElbowPlot(TN.combined, ndims = opt$pcs_global),
+  save_plot(ElbowPlot(TN.combined, ndims = opt$npcs_global),
                  file.path(output_dirs$plots, "TNcombined_elbow"))
 
   message("Running Harmony (assay: ", harmony_assay, ")...")
   TN.combined <- RunHarmony(TN.combined, group.by.vars = "batch",
                             assay.use = harmony_assay, verbose = FALSE)
 
-  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, seed.use = opt$seed,
-                         umap.method = "uwot", metric = "cosine", verbose = FALSE)
+  global_dims <- seq_len(opt$dims_global)
+  if (max(global_dims) > opt$npcs_global) stop("dims_global cannot exceed npcs_global")
 
-  TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = 1:opt$pcs_global, verbose = FALSE)
+  TN.combined <- RunUMAP(TN.combined, reduction = "harmony", dims = global_dims, seed.use = opt$seed, umap.method = "uwot", metric = "cosine", verbose = FALSE)
+  TN.combined <- FindNeighbors(TN.combined, reduction = "harmony", dims = global_dims, verbose = FALSE)
 
   # Resolutions to sweep for clustree come from config; chosen_res (the
   # single "active" resolution) must always be included in the sweep.
@@ -557,8 +563,6 @@ integrate_samples <- function(sample_list, chosen_res) {
   TN.combined@misc$pipeline_seed <- opt$seed
   TN.combined@misc$pipeline_config_path <- opt$config
 
-  message("Saving full integrated object to: ", integrated_full_rds)
-  saveRDS(TN.combined, integrated_full_rds)
 
   message("Trimming a lightweight copy with DietSeurat...")
   TN.diet <- DietSeurat(
@@ -797,22 +801,15 @@ generate_plots <- function(chosen_res) {
 execute_step <- function(step) {
   switch(step,
 
-    read_csv = { read_samples_csv(opt$file) },
-
-    process = {
-      samples_df <- readRDS(file.path(output_base, "samples_df.rds"))
-
-      pending <- which(!file.exists(
-        file.path(output_dirs$processed,
-                  paste0(samples_df$sample_names, "_processed.rds"))
-      ))
-
-      if (length(pending) == 0) {
-        message("All samples already processed; skipping")
-        return(invisible(NULL))
-      }
-      message("Processing ", length(pending), " sample(s) across ", n_cores, " core(s)")
-
+    process_single = {
+      if (is.null(opt$sample_name)) stop("--sample_name must be specified for 'process_single' step")
+      
+      # Read the CSV to get the metadata columns (ident1, ident2) for this specific sample
+      samples_df <- read_samples_csv(opt$file)
+      row <- samples_df[samples_df$sample_names == opt$sample_name, ]
+      
+      if (nrow(row) == 0) stop("Sample '", opt$sample_name, "' not found in input CSV.")
+      
       params <- list(
         doublet_rate    = opt$doublet_rate,
         min_features    = opt$min_features,
@@ -821,34 +818,17 @@ execute_step <- function(step) {
         healthy_samples = cfg_get(cfg, "clinical_groups", "Healthy", default = c()),
         pmh_samples     = cfg_get(cfg, "clinical_groups", "PMH", default = c())
       )
-      use_sct <- isTRUE(opt$use_sct)
-
-      results <- parallel::mclapply(
-        seq_len(nrow(samples_df)),
-        function(i) {
-          process_sample(
-            sample_name   = samples_df$sample_names[i],
-            sample_ident1 = samples_df$ident1[i],
-            sample_ident2 = samples_df$ident2[i],
-            base_data_dir = opt$datadir,
-            out_dirs      = output_dirs,
-            use_sct       = use_sct,
-            params        = params,
-            seed          = opt$seed
-          )
-        },
-        mc.cores       = n_cores,
-        mc.preschedule = FALSE,
-        mc.set.seed    = TRUE
+      
+      process_sample(
+        sample_name   = row$sample_names,
+        sample_ident1 = row$ident1,
+        sample_ident2 = row$ident2,
+        base_data_dir = opt$datadir,
+        out_dirs      = output_dirs,
+        use_sct       = isTRUE(opt$use_sct),
+        params        = params,
+        seed          = opt$seed
       )
-
-      failed <- which(sapply(results, is.null))
-      if (length(failed) > 0)
-        message("WARNING: failed samples - ",
-                paste(samples_df$sample_names[failed], collapse = ", "))
-      else
-        message("All samples processed successfully")
-      invisible(results)
     },
 
     integrate = {
@@ -856,10 +836,12 @@ execute_step <- function(step) {
         message("Loading existing integrated object: ", integrated_rds)
         return(readRDS(integrated_rds))
       }
-      sample_files <- list.files(output_dirs$processed,
+      # Point to the actual folder where step 2 saved the processed samples
+      processed_dir <- file.path(dirname(output_base), "01_per_sample_processed")
+      sample_files <- list.files(processed_dir,
                                  pattern = "_processed.rds$", full.names = TRUE)
       if (length(sample_files) == 0)
-        stop("No processed samples in ", output_dirs$processed)
+        stop("No processed samples in ", processed_dir)
       message("Integrating ", length(sample_files), " sample(s)")
       integrate_samples(lapply(sample_files, readRDS), chosen_res = opt$resolution)
     },
@@ -871,14 +853,6 @@ execute_step <- function(step) {
       dir.create(output_dirs$tables, recursive = TRUE, showWarnings = FALSE)
       generate_plots(chosen_res = opt$resolution)
     },
-
-    all = {
-      execute_step("read_csv")
-      execute_step("process")
-      execute_step("integrate")
-      execute_step("plot")
-    },
-
     stop("Invalid step. Choose: read_csv, process, integrate, plot, all")
   )
 }
@@ -892,4 +866,3 @@ if (is.null(opt$step)) stop("Specify pipeline step with -s")
 
 execute_step(opt$step)
 message("Step '", opt$step, "' completed at ", Sys.time())
-

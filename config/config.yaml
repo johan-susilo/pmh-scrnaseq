@@ -39,8 +39,13 @@ preprocessing:
   max_mt: 30
   use_sct: true
   batch_var: "orig.ident2"
-  pcs_local: 30       # Extracted from hardcoded 1:30
-  pcs_global: 50      # Extracted from hardcoded npcs = 50
+  
+  # decoupled PCA settings
+  npcs_local: 50
+  dims_local: 30
+  npcs_global: 50
+  dims_global: 30
+  dims_doubletfinder: 10
 
 # ------------------------------------------------------------------------------
 # 3. Pipeline Parameters: Subsetting
@@ -59,7 +64,6 @@ subsetting:
   resolutions: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2]
   uncertain_margin: 0.05       # relative floor, applied when top score is large
   uncertain_abs_margin: 0.0
-
     
 # ------------------------------------------------------------------------------
 # 4. Pipeline Parameters: Differential Expression
@@ -75,7 +79,6 @@ dge:
 pathway:
   logfc_cutoff: 0.5
   pval_cutoff: 0.05
-
 
 # ------------------------------------------------------------------------------
 # 6. Pipeline Parameters: CellChat (08_cellchat_analysis.R)

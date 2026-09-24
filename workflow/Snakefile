@@ -1,10 +1,17 @@
 import os
+import pandas as pd
+
 
 configfile: "config/config.yaml"
+
 
 OUTDIR = config.get("outdir", "results")
 DATADIR = config.get("data_dir", "data")
 INPUT_CSV = config.get("input_csv", "config/input.csv")
+samples_df = pd.read_csv(INPUT_CSV)
+SAMPLES = samples_df['sample_names'].tolist()
+
+
 RES = config["preprocessing"]["resolution"]
 CELLTYPES = config["subsetting"]["celltypes"]
 UNCERTAIN_MARGIN = config.get("subsetting", {}).get("uncertain_margin", 0.10)
@@ -23,30 +30,29 @@ CELLCHAT_OUTPUTS = [
 
 rule all:
     input:
-        os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds"),
-        os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "TN.combined_annotated.rds"),
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_subset_processed.rds"), celltype=CELLTYPES),
-        expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "00_data", "{celltype}_detailed_annotated.rds"), celltype=CELLTYPES),
+        # Final Pseudotime tables
         expand(os.path.join(OUTDIR, "03_subsets", "{celltype}", "05_pseudotime", "pseudotime_values.csv"), celltype=CELLTYPES),
-        os.path.join(OUTDIR, "03_subsets", "_dge.done"),
+        
+        # Final DGE & Pathway flags
         os.path.join(OUTDIR, "03_subsets", "_go.done"),
-        os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_dge.done"),
         os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "_global_go.done"),
+        
+        # Final Cellchat networks
         CELLCHAT_OUTPUTS,
         os.path.join(OUTDIR, "04_cellchat", "Global_Overview", "macro_global_cellchat.rds")
 
-rule preprocessing:
+rule process_single_sample:
     input:
-        csv = INPUT_CSV
+        csv = INPUT_CSV,
+        raw_data = os.path.join(DATADIR, "{sample}")
     output:
-        rds = os.path.join(OUTDIR, "01_preprocessing", "TN.combined_dim30.rds")
+        rds = os.path.join(OUTDIR, "01_per_sample_processed", "{sample}_processed.rds")
     log:
-        os.path.join(OUTDIR, "logs", "01_preprocessing.log")
-    threads: config["preprocessing"].get("threads", 8)
+        os.path.join(OUTDIR, "logs", "01_qc_{sample}.log")
     params:
-        datadir = DATADIR,
-        outdir = os.path.join(OUTDIR, "01_preprocessing"),
+        outdir = OUTDIR,
         res = RES
+    threads: 8  # <--- Let Snakemake know this job takes 8 threads
     shell:
         """
         eval "$(mamba shell hook --shell bash)"
@@ -54,26 +60,50 @@ rule preprocessing:
         
         Rscript workflow/scripts/01_preprocessing.R \
             -f {input.csv} \
-            -d {params.datadir} \
+            -d {DATADIR} \
             -o {params.outdir} \
-            -s all \
-            -r {params.res} \
-            -c {threads} &> {log}  
+            -s process_single \
+            --sample_name {wildcards.sample} \
+            -c {threads} \
+            -r {params.res} &> {log}  
+        """
+
+rule integrate_samples:
+    input:
+        csv = INPUT_CSV,
+        processed_rds = expand(os.path.join(OUTDIR, "01_per_sample_processed", "{sample}_processed.rds"), sample=SAMPLES)
+    output:
+        rds = os.path.join(OUTDIR, "01_preprocessing", "TN.combined.rds")
+    log:
+        os.path.join(OUTDIR, "logs", "01_integration.log")
+    params:
+        outdir = os.path.join(OUTDIR, "01_preprocessing"),
+        res = RES
+    threads: 8
+    shell:
+        """
+        eval "$(mamba shell hook --shell bash)"
+        mamba activate seurat_env
+        
+        Rscript workflow/scripts/01_preprocessing.R \
+            -f {input.csv} \
+            -d {DATADIR} \
+            -o {params.outdir} \
+            -s integrate \
+            -c {threads} \
+            -r {params.res} &> {log}
         """
 
 rule global_annotation:
     input:
-        rds = rules.preprocessing.output.rds
+        rds = rules.integrate_samples.output.rds
     output:
-        # The R script dynamically creates a res_{resolution} folder and saves the annotated object here
         annotated_rds = os.path.join(OUTDIR, "02_global_annotation", f"res_{RES}", "TN.combined_annotated.rds")
     log:
         os.path.join(OUTDIR, "logs", "02_global_annotation.log")
     params:
-        # Numbered output directory for neatness
         outdir = os.path.join(OUTDIR, "02_global_annotation"),
         res = RES,
-        # Pass the preprocessing plots folder so the script can copy UMAPs for comparison
         plots_dir = os.path.join(OUTDIR, "01_preprocessing", "plots", f"res_{RES}")
     shell:
         """

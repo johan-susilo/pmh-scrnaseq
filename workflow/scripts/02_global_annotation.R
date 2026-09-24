@@ -1,9 +1,9 @@
 #!/usr/bin/env Rscript
 # Usage:
-#   Rscript 02_global_annotation.R -i results/01_preprocessing/TN.combined_dim30.rds -o results/02_annotation -s all -r 0.2
+#   Rscript 02_global_annotation.R -i results/01_preprocessing/TN.combined.rds -o results/02_annotation -s all -r 0.2
 #
 # Steps:
-#   read_rds        - load TN.combined_dim30.rds and cache seurat_objects.rds
+#   read_rds        - load TN.combined.rds and cache seurat_objects.rds
 #   singleR         - SingleR annotation (HPCA + BlueprintEncode)
 #   markers         - classical marker DotPlots
 #   celliD          - CelliD / PanglaoDB annotation
@@ -46,7 +46,7 @@ source("workflow/scripts/00_utils.R")
 
 option_list <- list(
   make_option(c("-i", "--rds"),        type = "character", default = NULL,
-              help = "Path to TN.combined_dim30.rds (output of 01_preprocessing.R -s integrate)"),
+              help = "Path to TN.combined.rds (output of 01_preprocessing.R -s integrate)"),
   make_option(c("-s", "--step"),       type = "character", default = "all",
               help = "Pipeline step: read_rds, singleR, markers, celliD, scCATCH, consensus, apply_labels, combined_plots, all"),
   make_option(c("-o", "--output"),     type = "character", default = "results",
@@ -71,7 +71,7 @@ opt$seed       <- opt$seed       %||% cfg_get(cfg, "reproducibility", "random_se
 # No guessed default for -i/--rds or -p/--plots: each Snakemake rule passes
 # its own -o, so there's no reliable shared "base" directory to derive 01's
 # output path from here. Pass -i explicitly (the Snakefile's `input:` block
-# should point at 01's TN.combined_dim30.rds -- see 01_preprocessing.R).
+# should point at 01's TN.combined.rds -- see 01_preprocessing.R).
 
 set.seed(opt$seed)
 
@@ -808,7 +808,7 @@ apply_labels <- function(TN.combined) {
     final_ctype_by_cluster[strip_cluster_prefix(as.character(Idents(TN.combined)))])
 
   # Carry annotation columns back onto the input object too, so any script
-  # that loaded TN.combined_dim30.rds directly still sees them, and persist
+  # that loaded TN.combined.rds directly still sees them, and persist
   # the run's seed/config for provenance.
   TN.combined$cluster_label   <- TN.annotated$cluster_label
   TN.combined$cell_type_short <- TN.annotated$cell_type_short

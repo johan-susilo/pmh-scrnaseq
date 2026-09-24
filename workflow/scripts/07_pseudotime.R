@@ -1,8 +1,8 @@
 #!/usr/bin/env Rscript
 # Pseudotime Analysis using Monocle3
-# Usage: Rscript ./pseudotime.R -r TN.combined_dim30.rds -c 0,2,3,6,15 -o output/pseudotime
-# Example: Rscript ./pseudotime.R -r /home/johan/output/skin_pmh/TN.combined_dim30.rds -c 0,1,2,3 -o /home/johan/output/skin_pmh/pseudotime
-# Example: Rscript ./pseudotime.R -r TN.combined_dim30.rds --all_clusters -o output/pseudotime
+# Usage: Rscript ./pseudotime.R -r TN.combined.rds -c 0,2,3,6,15 -o output/pseudotime
+# Example: Rscript ./pseudotime.R -r /home/johan/output/skin_pmh/TN.combined.rds -c 0,1,2,3 -o /home/johan/output/skin_pmh/pseudotime
+# Example: Rscript ./pseudotime.R -r TN.combined.rds --all_clusters -o output/pseudotime
 
 #Rscript /home/johan/pipeline/scRNA/skin/pseudotime.R  -r "/home/johan/output/skin_pmh_harmony_sctransform2/subset_cluster/fibroblast/processed/fibroblast_detailed_annotated.rds"  --all_clusters  -o "/home/johan/output/skin_pmh_harmony_sctransform2/subset_cluster/fibroblast/pseudotime_global"
 
@@ -190,23 +190,26 @@ message("Genes: ", nrow(cds))
 # Porting Seurat Embeddings to Monocle3
 # ==============================================================================
 message("\nImporting Harmony-integrated UMAP from Seurat...")
-
 # 1. Force the exact Seurat UMAP coordinates into Monocle3
 reducedDims(cds)[["UMAP"]] <- TN.subset[["umap"]]@cell.embeddings
 
 # 2. Force the exact detailed text labels as the Monocle3 clusters
-cds@clusters$UMAP$clusters <- as.factor(TN.subset$Detailed_Label)
+cluster_labels <- as.factor(TN.subset$Detailed_Label)
+names(cluster_labels) <- colnames(cds)
+cds@clusters$UMAP$clusters <- cluster_labels
 
-cds@clusters$UMAP$partitions <- cds@clusters$UMAP$clusters
+# 3. Create a single overarching partition so the trajectory connects the clusters
+partition_labels <- factor(rep("1", ncol(cds)))
+names(partition_labels) <- colnames(cds)
+cds@clusters$UMAP$partitions <- partition_labels
 
 # ==============================================================================
 # Learning the Trajectory Graph
 # ==============================================================================
 message("\nLearning trajectory graph on imported UMAP...")
-
 # Run learn_graph directly on the imported Seurat layout
 set.seed(opt$seed)
-cds <- learn_graph(cds, use_partition = TRUE)
+cds <- learn_graph(cds, use_partition = FALSE)
 
 message("Plotting trajectory...")
 p_trajectory <- plot_cells(cds,
