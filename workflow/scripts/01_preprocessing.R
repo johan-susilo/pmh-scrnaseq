@@ -17,6 +17,8 @@
 # preprocessing.resolution / the --resolution flag, resolvable via
 # resolve_res_col() in 00_utils.R.
 
+# Rscript 01_preprocess.R 2>&1 | tee /home/johan/output/skin_pmh_test2/00_logs/01_preprocess.log
+
 suppressPackageStartupMessages({
   library(optparse)
   library(Seurat)
@@ -141,8 +143,7 @@ set.seed(opt$seed)
 
 output_base <- if (!is.null(opt$output) && nzchar(opt$output)) opt$output else "results"
 dir.create(output_base, recursive = TRUE, showWarnings = FALSE)
-output_dirs <- make_stage_dirs(output_base, c("01_per_sample_processed", "02_plots", "03_tables", "logs"))
-names(output_dirs) <- c("processed", "plots", "tables", "logs")
+
 
 # ==============================================================================
 # PARALLEL SETUP
@@ -577,7 +578,7 @@ integrate_samples <- function(sample_list, chosen_res) {
   message("Saving diet integrated object to: ", integrated_rds)
   saveRDS(TN.diet, integrated_rds)
 
-  message("===== Harmony integration and dual-saving complete =====\n")
+  message("===== Harmony integration complete =====\n")
   TN.combined
 }
 
@@ -804,6 +805,9 @@ execute_step <- function(step) {
     process_single = {
       if (is.null(opt$sample_name)) stop("--sample_name must be specified for 'process_single' step")
       
+      output_dirs <- make_stage_dirs(output_base, c("01_per_sample_processed", "02_plots", "03_tables", "logs"))
+      names(output_dirs) <- c("processed", "plots", "tables", "logs")
+
       # Read the CSV to get the metadata columns (ident1, ident2) for this specific sample
       samples_df <- read_samples_csv(opt$file)
       row <- samples_df[samples_df$sample_names == opt$sample_name, ]
